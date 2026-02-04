@@ -1,0 +1,8 @@
+# Core dependencies for NeXus Generator
+pandas>=2.3.0,<3.0.0
+numpy>=2.4.0,<3.0.0
+h5py>=3.15.0
+fabio>=2025.0.0
+
+# Optional: for xlsx/csv support
+openpyxl>=3.0.0
