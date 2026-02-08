@@ -100,6 +100,18 @@ def convert_csv_to_txt(csv_path: str) -> str:
         return csv_path
 
 
+def _nan_to_none(value: Any) -> Any:
+    """Convert NaN/NaT values to None for safe use outside pandas."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (ValueError, TypeError):
+        pass
+    return value
+
+
 # ============================================================================
 # Data Models and Enums
 # ============================================================================
@@ -150,7 +162,6 @@ class NXSConfig:
     include_2d_images: bool = False
 
 
-# Global config instance
 config = NXSConfig()
 
 
@@ -617,15 +628,19 @@ class FileClassificationManager:
         """Classify files and extract metadata."""
         df = df.copy()
 
+        # Ensure columns exist with object dtype to safely hold mixed
+        for col in ["oned", "twod", "echem", "neutron_meta", "source_nxs"]:
+            if col not in df.columns:
+                df[col] = pd.array([None] * len(df), dtype="object")
+            else:
+                df[col] = df[col].astype("object")
         if "exposure_time" not in df.columns:
-            df["exposure_time"] = None
-        if "neutron_meta" not in df.columns:
-            df["neutron_meta"] = None
-        if "source_nxs" not in df.columns:
-            df["source_nxs"] = None
+            df["exposure_time"] = pd.array([None] * len(df), dtype="object")
+        if "timestamp" not in df.columns:
+            df["timestamp"] = pd.array([None] * len(df), dtype="object")
 
         for idx, row in df.iterrows():
-            if row["oned"] is not None or row["twod"] is not None or row["neutron_meta"] is not None:
+            if pd.notna(row["oned"]) or pd.notna(row["twod"]) or pd.notna(row["neutron_meta"]):
                 continue
 
             file_path = row["path"]
@@ -1590,7 +1605,7 @@ class ScanProcessor:
             # Fallback to old behavior if needed
             xrd_timestamps = []
             for _, row in df.iterrows():
-                if row.get("timestamp") and (row.get("oned") or row.get("twod")):
+                if pd.notna(row.get("timestamp")) and (pd.notna(row.get("oned")) or pd.notna(row.get("twod"))):
                     try:
                         xrd_timestamps.append(pd.to_datetime(row["timestamp"]))
                     except (ValueError, TypeError):
@@ -1616,7 +1631,7 @@ class ScanProcessor:
             # Fallback old behavior
             neutron_timestamps = []
             for _, row in neutron_df.iterrows():
-                if row.get("start_time"):
+                if pd.notna(row.get("start_time")):
                     try:
                         neutron_timestamps.append(pd.to_datetime(row["start_time"]))
                     except (ValueError, TypeError):
@@ -1703,14 +1718,14 @@ class ScanProcessor:
             for idx, row in synchrotron_df.iterrows():
                 scan = Scan(
                     scan_num=0,
-                    oned=row["oned"],
-                    twod=row["twod"],
-                    timestamp=row["timestamp"],
-                    original_timestamp=row["timestamp"],
-                    exposure_time=row.get("exposure_time"),
-                    oned_exposure=row.get("exposure_time"),
-                    twod_exposure=row.get("exposure_time"),
-                    source_nxs=row.get("path")
+                    oned=_nan_to_none(row["oned"]),
+                    twod=_nan_to_none(row["twod"]),
+                    timestamp=_nan_to_none(row["timestamp"]),
+                    original_timestamp=_nan_to_none(row["timestamp"]),
+                    exposure_time=_nan_to_none(row.get("exposure_time")),
+                    oned_exposure=_nan_to_none(row.get("exposure_time")),
+                    twod_exposure=_nan_to_none(row.get("exposure_time")),
+                    source_nxs=_nan_to_none(row.get("path"))
                 )
                 scan_list.append(scan)
         else:
@@ -1721,35 +1736,40 @@ class ScanProcessor:
             for idx, row in oned_df.iterrows():
                 scan = Scan(
                     scan_num=0,
-                    oned=row["oned"],
-                    timestamp=row.get("timestamp"),
-                    original_timestamp=row.get("timestamp"),
-                    oned_exposure=row.get("exposure_time")
+                    oned=_nan_to_none(row["oned"]),
+                    timestamp=_nan_to_none(row.get("timestamp")),
+                    original_timestamp=_nan_to_none(row.get("timestamp")),
+                    oned_exposure=_nan_to_none(row.get("exposure_time"))
                 )
                 scan_list.append(scan)
 
             for idx, row in twod_df.iterrows():
                 existing = None
+                row_ts = _nan_to_none(row.get("timestamp"))
                 for existing_scan in scan_list:
-                    if existing_scan.timestamp == row.get("timestamp"):
+                    if (pd.notna(row_ts) and pd.notna(existing_scan.timestamp)
+                            and existing_scan.timestamp == row_ts):
                         existing = existing_scan
                         break
 
                 if existing:
-                    existing.twod = row["twod"]
-                    existing.twod_exposure = row.get("exposure_time")
+                    existing.twod = _nan_to_none(row["twod"])
+                    existing.twod_exposure = _nan_to_none(row.get("exposure_time"))
                 else:
                     scan = Scan(
                         scan_num=0,
-                        twod=row["twod"],
-                        timestamp=row.get("timestamp"),
-                        original_timestamp=row.get("timestamp"),
-                        twod_exposure=row.get("exposure_time")
+                        twod=_nan_to_none(row["twod"]),
+                        timestamp=_nan_to_none(row.get("timestamp")),
+                        original_timestamp=_nan_to_none(row.get("timestamp")),
+                        twod_exposure=_nan_to_none(row.get("exposure_time"))
                     )
                     scan_list.append(scan)
 
         # Sort scans by timestamp
-        scan_list.sort(key=lambda s: pd.to_datetime(s.timestamp) if s.timestamp else pd.Timestamp.min)
+        # Use a safe sentinel instead of pd.Timestamp.min to avoid
+        # datetime resolution mismatches in pandas >= 3.0
+        _sort_sentinel = pd.Timestamp("1900-01-01")
+        scan_list.sort(key=lambda s: pd.to_datetime(s.timestamp) if s.timestamp else _sort_sentinel)
 
         # Assign scan numbers
         for i, scan in enumerate(scan_list, start=1):
@@ -1821,9 +1841,9 @@ class ScanProcessor:
 
             scan_relative_seconds = (scan.timestamp_for_correlation - reference_time).total_seconds()
 
-            time_diffs = np.abs(echem_relative_seconds - scan_relative_seconds)
-            nearest_idx = time_diffs.argmin()
-            min_diff_seconds = time_diffs.iloc[nearest_idx]
+            time_diffs = np.abs(echem_relative_seconds.values - scan_relative_seconds)
+            nearest_idx = int(np.argmin(time_diffs))
+            min_diff_seconds = time_diffs[nearest_idx]
 
             if min_diff_seconds < config.echem_time_tolerance:
                 scan.echem = float(echem_df.iloc[nearest_idx]["echem_data"])
@@ -1843,10 +1863,10 @@ class ScanProcessor:
             echem_timestamps = pd.to_datetime(echem_df["timestamp"])
         except (ValueError, TypeError):
             try:
-                echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S.%f', dayfirst=True)
+                echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S.%f')
             except (ValueError, TypeError):
                 try:
-                    echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S', dayfirst=True)
+                    echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S')
                 except (ValueError, TypeError):
                     logger.error("Could not parse echem timestamps")
                     return
@@ -1873,7 +1893,7 @@ class ScanProcessor:
                 continue
 
             time_diffs = abs(echem_timestamps - scan_time)
-            nearest_idx = time_diffs.argmin()
+            nearest_idx = int(np.argmin(time_diffs.values))
             min_diff = time_diffs.iloc[nearest_idx]
 
             if min_diff.total_seconds() < config.echem_time_tolerance:
@@ -2085,13 +2105,17 @@ class NXSWriter:
                 echem_group = f.create_group('operando_electrochemistry')
                 echem_group.attrs['NX_class'] = 'NXdata'
 
-                # Convert timestamps to strings
-                timestamps = echem_df['timestamp'].astype(str).values
+                # Convert timestamps to strings — use .to_numpy(dtype=object)
+                # to ensure plain NumPy arrays for h5py (pandas >= 3.0 str
+                # dtype .values may return PyArrow-backed arrays).
+                timestamps = echem_df['timestamp'].astype(str).to_numpy(dtype=object)
                 echem_group.create_dataset('timestamps', data=timestamps)
-                echem_group.create_dataset('voltage (V)', data=echem_df['echem_data'].values)
+                echem_group.create_dataset('voltage (V)',
+                                           data=echem_df['echem_data'].to_numpy(dtype=float))
 
                 if 'current' in echem_df.columns:
-                    echem_group.create_dataset('current (mA)', data=echem_df['current'].values)
+                    current_values = echem_df['current'].to_numpy(dtype=float)
+                    echem_group.create_dataset('current (mA)', data=current_values)
 
             # Store standard echem data
             if standard_echem_files:
@@ -2112,13 +2136,14 @@ class NXSWriter:
                     std_group.attrs['NX_class'] = 'NXdata'
                     std_group.attrs['source_file'] = os.path.basename(std_echem_path)
 
-                    std_timestamps = standard_echem_df['timestamp'].astype(str).values
+                    std_timestamps = standard_echem_df['timestamp'].astype(str).to_numpy(dtype=object)
                     std_group.create_dataset('timestamps', data=std_timestamps)
-                    std_group.create_dataset('voltage (V)', data=standard_echem_df['echem_data'].values)
+                    std_group.create_dataset('voltage (V)',
+                                             data=standard_echem_df['echem_data'].to_numpy(dtype=float))
 
                     if 'current' in standard_echem_df.columns:
-                        current_vals = standard_echem_df['current'].values
-                        if not np.all(pd.isna(current_vals)):
+                        current_vals = standard_echem_df['current'].to_numpy(dtype=float)
+                        if not np.all(np.isnan(current_vals)):
                             std_group.create_dataset('current (mA)', data=current_vals)
 
                     logger.info(f"Added standard electrochemistry file {idx}:"
@@ -2186,6 +2211,11 @@ class NXSGenerator:
                 return False, ["No files found to process"]
 
             records_df = pd.DataFrame([r.__dict__ for r in records])
+
+            for col in ["oned", "twod", "echem", "neutron_meta", "timestamp",
+                        "source_nxs", "path", "original_path"]:
+                if col in records_df.columns:
+                    records_df[col] = records_df[col].astype("object")
 
             if progress_callback:
                 progress_callback("Classifying files...")
@@ -2591,6 +2621,6 @@ def main() -> None:
     NXSGeneratorGUI(root)
     root.mainloop()
 
+
 if __name__ == "__main__":
     main()
-
