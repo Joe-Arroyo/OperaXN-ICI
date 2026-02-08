@@ -50,6 +50,7 @@ BATCH_SIZE = 20
 SYNCHROTRON_MAX_DISPLAY_SIZE = 4096
 MAX_DATASET_ELEMENTS = 50_000_000
 TARGET_DISPLAY_PIXELS = 2048 * 2048
+CLASSIFIER_CACHE_SIZE = 128
 
 # Metadata exclusion fields
 EDF_EXCLUDE_FIELDS = {
@@ -120,6 +121,9 @@ class FileType(Enum):
     ZIP = ".zip"
     XLSX = ".xlsx"
     CSV = ".csv"
+
+
+SUPPORTED_EXTENSIONS = {ft.value for ft in FileType}
 
 
 class DataType(Enum):
@@ -454,7 +458,7 @@ class DataReaderFactory:
             return cls.NEUTRON_READER
 
         ext = os.path.splitext(file_path)[1].lower()
-        file_type = FileType(ext) if ext in [ft.value for ft in FileType] else None
+        file_type = FileType(ext) if ext in SUPPORTED_EXTENSIONS else None
 
         if file_type and file_type in cls.READERS:
             return cls.READERS[file_type]
@@ -483,7 +487,7 @@ class FileClassifierBase(ABC):
 class DATClassifier(FileClassifierBase):
     """Classifier for DAT files."""
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
         """Classify DAT file and extract metadata."""
         try:
@@ -522,7 +526,7 @@ class DATClassifier(FileClassifierBase):
 class EDFClassifier(FileClassifierBase):
     """Classifier for EDF files."""
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
         """Classify EDF file and extract metadata."""
         try:
@@ -554,7 +558,7 @@ class TXTClassifier(FileClassifierBase):
 
     ECHEM_KEYWORDS = ["time", "absolute", "ecell", "voltage", "current", "i/", "ewe", "v/"]
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
         """Classify TXT file as echem or neutron metadata."""
         try:
@@ -629,7 +633,7 @@ class FileClassificationManager:
 
             if self.data_source == DataSourceType.NEUTRON:
                 if ext == '.txt':
-                    file_type = FileType(ext) if ext in [ft.value for ft in FileType] else None
+                    file_type = FileType(ext) if ext in SUPPORTED_EXTENSIONS else None
                     if file_type and file_type in self.classifiers:
                         classifier = self.classifiers[file_type]
                         data_type, timestamp, exposure_time = classifier.classify(file_path)
@@ -645,7 +649,7 @@ class FileClassificationManager:
                             df.at[idx, "exposure_time"] = exposure_time
 
             else:
-                file_type = FileType(ext) if ext in [ft.value for ft in FileType] else None
+                file_type = FileType(ext) if ext in SUPPORTED_EXTENSIONS else None
                 if file_type and file_type in self.classifiers:
                     classifier = self.classifiers[file_type]
                     data_type, timestamp, exposure_time = classifier.classify(file_path)
@@ -777,7 +781,7 @@ class NexusMetadataExtractor:
         '/entry1/instrument/detector/preset',
     ]
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def extract(self, nxs_path: str) -> Optional[Dict[str, Any]]:
         """Extract timestamp and exposure time from NeXus file."""
         try:
@@ -1291,11 +1295,15 @@ class FileProcessor:
                 remaining_files.append((extracted_path, original_path))
 
         if remaining_files:
-            if config.parallel_processing and len(remaining_files) > 20:
-                remaining_records = self._process_remaining_files_parallel(remaining_files)
+            if config.parallel_processing and len(remaining_files) > BATCH_SIZE:
+                chunk_size = max(BATCH_SIZE, len(remaining_files) // config.max_workers)
+                chunks = [remaining_files[i:i + chunk_size]
+                          for i in range(0, len(remaining_files), chunk_size)]
+                with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+                    for chunk_records in executor.map(self._process_remaining_chunk, chunks):
+                        records.extend(chunk_records)
             else:
-                remaining_records = self._process_remaining_files_sequential(remaining_files)
-            records.extend(remaining_records)
+                records.extend(self._process_remaining_chunk(remaining_files))
 
         return records
 
@@ -1370,6 +1378,7 @@ class FileProcessor:
         try:
             with zipfile.ZipFile(zip_path, "r") as archive:
                 members = archive.namelist()
+                supported_exts = SUPPORTED_EXTENSIONS - {FileType.ZIP.value}
 
                 for member in members:
                     if (member.endswith("/") or
@@ -1378,7 +1387,6 @@ class FileProcessor:
                         continue
 
                     member_ext = os.path.splitext(member)[1].lower()
-                    supported_exts = [ft.value for ft in FileType if ft != FileType.ZIP]
 
                     if member_ext in supported_exts:
                         extracted_path = archive.extract(member, self.tempdir)
@@ -1407,7 +1415,7 @@ class FileProcessor:
                 if ext == FileType.ZIP.value:
                     extracted = self._extract_zip_files(file_path)
                     files.extend(extracted)
-                elif ext in [ft.value for ft in FileType]:
+                elif ext in SUPPORTED_EXTENSIONS:
                     files.append((file_path, file_path))
 
         return files
@@ -1425,25 +1433,6 @@ class FileProcessor:
                         self.processed_files.add(file_path)
 
         return records
-
-    def _process_remaining_files_parallel(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process remaining files in parallel."""
-        chunk_size = max(BATCH_SIZE, len(files) // config.max_workers)
-        chunks = [files[i:i + chunk_size]
-                  for i in range(0, len(files), chunk_size)]
-
-        with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
-            chunk_results = list(executor.map(self._process_remaining_chunk, chunks))
-
-        records: List[FileRecord] = []
-        for chunk_records in chunk_results:
-            records.extend(chunk_records)
-
-        return records
-
-    def _process_remaining_files_sequential(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process remaining files sequentially."""
-        return self._process_remaining_chunk(files)
 
     def _process_remaining_chunk(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
         """Process a chunk of remaining files."""
@@ -2009,60 +1998,7 @@ class NXSWriter:
 
                     # 2D data
                     if scan.twod:
-                        basename = os.path.basename(scan.twod)
-                        ext = os.path.splitext(basename)[1].lower()
-
-                        if ext == '.hdf':
-                            # Synchrotron HDF files
-                            if config.include_2d_images:
-                                try:
-                                    hdf_reader = HDFReader()
-                                    data_2d = hdf_reader.read(scan.twod)
-                                    xrd_group.create_dataset('twod_image', data=data_2d,
-                                                             compression='gzip', compression_opts=4)
-                                    xrd_group.attrs['twod_source_file'] = basename
-                                    xrd_group.attrs['twod_is_hdf'] = True
-                                    xrd_group.attrs['twod_source_path'] = scan.twod
-                                    xrd_group.attrs['twod_embedded'] = True
-                                    logger.info(f"Embedded 2D synchrotron image for scan {scan.scan_num}")
-                                except Exception as e:
-                                    logger.error(f"Error reading HDF data for scan {scan.scan_num}: {e}")
-                                    xrd_group.attrs['twod_source_file'] = basename
-                                    xrd_group.attrs['twod_is_hdf'] = True
-                                    xrd_group.attrs['twod_embedded'] = False
-                            else:
-                                # Only store reference, not the image data
-                                xrd_group.attrs['twod_source_file'] = basename
-                                xrd_group.attrs['twod_is_hdf'] = True
-                                xrd_group.attrs['twod_source_path'] = scan.twod
-                                xrd_group.attrs['twod_embedded'] = False
-                        else:
-                            # For EDF files (inhouse)
-                            if config.include_2d_images:
-                                try:
-                                    data_2d = reader_factory.read_file(scan.twod)
-                                    xrd_group.create_dataset(
-                                        'twod_image',
-                                        data=data_2d,
-                                        compression='gzip',
-                                        compression_opts=4
-                                    )
-                                    xrd_group.attrs['twod_source_file'] = basename
-                                    xrd_group.attrs['twod_is_hdf'] = False
-                                    xrd_group.attrs['twod_source_path'] = scan.twod
-                                    xrd_group.attrs['twod_embedded'] = True
-                                except Exception as e:
-                                    logger.error(f"Error reading 2D data for scan {scan.scan_num}: {e}")
-                                    xrd_group.attrs['twod_source_file'] = basename
-                                    xrd_group.attrs['twod_is_hdf'] = False
-                                    xrd_group.attrs['twod_source_path'] = scan.twod
-                                    xrd_group.attrs['twod_embedded'] = False
-                            else:
-                                # Only store reference, not the image data
-                                xrd_group.attrs['twod_source_file'] = basename
-                                xrd_group.attrs['twod_is_hdf'] = False
-                                xrd_group.attrs['twod_source_path'] = scan.twod
-                                xrd_group.attrs['twod_embedded'] = False
+                        self._write_2d_data(xrd_group, scan, reader_factory)
 
                 # Neutron data
                 if scan.neutron_files:
@@ -2082,8 +2018,7 @@ class NXSWriter:
                         # TOF data
                         if 'tof' in meas_files:
                             try:
-                                reader = DATReader("neutron")
-                                tof_data = reader.read(meas_files['tof'])
+                                tof_data = reader_factory.read_file(meas_files['tof'], is_neutron=True)
                                 bank_group.create_dataset('tof', data=tof_data[:, 0])
                                 bank_group.create_dataset('tof_intensity', data=tof_data[:, 1])
                                 bank_group.attrs['tof_source_file'] = os.path.basename(meas_files['tof'])
@@ -2094,8 +2029,7 @@ class NXSWriter:
                         # d-spacing data
                         if 'd' in meas_files:
                             try:
-                                reader = DATReader("neutron")
-                                d_data = reader.read(meas_files['d'])
+                                d_data = reader_factory.read_file(meas_files['d'], is_neutron=True)
                                 bank_group.create_dataset('d_spacing', data=d_data[:, 0])
                                 bank_group.create_dataset('d_intensity', data=d_data[:, 1])
                                 bank_group.attrs['d_source_file'] = os.path.basename(meas_files['d'])
@@ -2192,6 +2126,41 @@ class NXSWriter:
 
         logger.info(f"NeXus file successfully written to {output_path}")
 
+    @staticmethod
+    def _write_2d_data(xrd_group: h5py.Group, scan: Scan,
+                       reader_factory: DataReaderFactory) -> None:
+        if not scan.twod:
+            return
+
+        twod_path = str(scan.twod)
+        basename = os.path.basename(twod_path)
+        ext = os.path.splitext(basename)[1].lower()
+
+        is_hdf = (ext == ".hdf")
+        is_edf = (ext == ".edf")
+
+        # Always store the link/reference
+        xrd_group.attrs["twod_source"] = basename
+        xrd_group.attrs["twod_is_hdf"] = is_hdf
+        xrd_group.attrs["twod_is_edf"] = is_edf
+
+        if not config.include_2d_images:
+            xrd_group.attrs["twod_embedded"] = False
+            return
+
+        try:
+            if is_hdf:
+                data_2d = HDFReader().read(twod_path)
+            else:
+                data_2d = reader_factory.read_file(twod_path)
+
+            xrd_group.create_dataset("twod_image", data=data_2d)
+            xrd_group.attrs["twod_embedded"] = True
+
+        except Exception as e:
+            logger.error(f"Error embedding 2D data for scan {scan.scan_num}: {e}")
+            xrd_group.attrs["twod_embedded"] = False
+
 
 # ============================================================================
 # NeXus Generator
@@ -2286,6 +2255,7 @@ class NXSGeneratorGUI:
         self.input_path = tk.StringVar()
         self.output_path = tk.StringVar()
         self.standard_echem_files: List[str] = []
+        self.standard_echem_original_files: List[str] = []
         self.standard_echem_display = tk.StringVar()
         self.data_source = tk.StringVar(value="inhouse")
         self.time_method = tk.StringVar(value="absolute")
@@ -2498,7 +2468,6 @@ class NXSGeneratorGUI:
             self.output_path.set(filename)
 
     def select_standard_echem(self) -> None:
-        """Open dialog for multiple standard electrochemistry file selection."""
         filenames = filedialog.askopenfilenames(
             title="Select Standard Electrochemistry Files",
             filetypes=[
@@ -2509,23 +2478,32 @@ class NXSGeneratorGUI:
                 ("All files", "*.*")
             ]
         )
-        if filenames:
-            self.clear_standard_echem()
-            for filepath in filenames:
-                # Convert xlsx/csv to txt if needed
-                lower_path = filepath.lower()
-                if lower_path.endswith('.xlsx'):
-                    converted_path = convert_xlsx_to_txt(filepath)
-                elif lower_path.endswith('.csv'):
-                    converted_path = convert_csv_to_txt(filepath)
-                else:
-                    converted_path = filepath
-                self.standard_echem_files.append(converted_path)
-            self.standard_echem_display.set(f"{len(self.standard_echem_files)} file(s) selected")
+        if not filenames:
+            return
+
+        self.clear_standard_echem()
+
+        for filepath in filenames:
+            # Keep original for display
+            self.standard_echem_original_files.append(filepath)
+
+            # Keep processed/converted for writing/parsing
+            lower_path = filepath.lower()
+            if lower_path.endswith('.xlsx'):
+                converted_path = convert_xlsx_to_txt(filepath)
+            elif lower_path.endswith('.csv'):
+                converted_path = convert_csv_to_txt(filepath)
+            else:
+                converted_path = filepath
+
+            self.standard_echem_files.append(converted_path)
+
+        self.standard_echem_display.set(" | ".join(self.standard_echem_original_files))
 
     def clear_standard_echem(self) -> None:
         """Clear selected standard electrochemistry files."""
         self.standard_echem_files = []
+        self.standard_echem_original_files = []
         self.standard_echem_display.set("")
 
     def update_progress(self, message: str) -> None:
