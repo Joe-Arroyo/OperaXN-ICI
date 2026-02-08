@@ -8,15 +8,16 @@ Usage:
 
 What it does:
   - Opens the given .nxs file
-  - Extracts global_metadata (instrument_settings, beamline_settings)
+  - Extracts global_metadata (with subgroups like edf_metadata, synchrotron_metadata)
   - Extracts up to the first 5 scans (scan_0001...)
+  - Extracts operando and standard electrochemistry data
   - Saves:
       * xrd 1D -> xrd_oned.csv
       * xrd 2D (if embedded) -> xrd_twod.npy
       * neutron banks (TOF & d) -> bank_*/.csv
+      * operando echem -> operando_echem.csv
+      * standard echem -> standard_echem_*.csv
       * scan metadata -> included in per-file summary.json
-      * operando electrochemistry -> echem_timeseries.csv
-      * standard electrochemistry -> standard_echem/file_XXX.csv
   - Writes a quick per-file summary.json and prints a short terminal summary
 """
 
@@ -85,7 +86,7 @@ def write_csv(path: str, header: List[str], data: np.ndarray):
 
 
 def extract_global_metadata(h5file, summary: Dict[str, Any]):
-    """Extract all global_metadata including instrument_settings and beamline_settings."""
+    """Extract all global_metadata including subgroups (edf_metadata, synchrotron_metadata)."""
     if "global_metadata" not in h5file:
         summary["global_metadata"] = None
         return
@@ -98,7 +99,7 @@ def extract_global_metadata(h5file, summary: Dict[str, Any]):
     for attr_name in gm.attrs.keys():
         gm_out["_attributes"][attr_name] = decode_value(gm.attrs[attr_name])
 
-    # Extract subgroups (instrument_settings, beamline_settings, etc.)
+    # Extract subgroups (edf_metadata, synchrotron_metadata, etc.)
     for subgroup_name in gm.keys():
         subgroup = gm[subgroup_name]
 
@@ -130,6 +131,8 @@ def extract_xrd(scan_grp, outdir_scan: str, s: Dict[str, Any]):
     if "xrd_data" not in scan_grp:
         return
     xrd = scan_grp["xrd_data"]
+
+    # 1D data
     th = safe_data(xrd, "oned_2theta")
     inten = safe_data(xrd, "oned_intensity")
     if th is not None and inten is not None and len(th) == len(inten):
@@ -137,16 +140,30 @@ def extract_xrd(scan_grp, outdir_scan: str, s: Dict[str, Any]):
                   ["two_theta", "intensity"],
                   np.column_stack([th, inten]))
         s["xrd_oned_points"] = int(len(th))
+        s["xrd_oned_source"] = safe_attr(xrd, "oned_source_file")
 
+    # 2D data - check if embedded or external
     img = safe_data(xrd, "twod_image")
-    if img is not None:
+    is_embedded = safe_attr(xrd, "twod_embedded")
+    source_file = safe_attr(xrd, "twod_source_file")
+
+    if img is not None and is_embedded:
+        # Embedded 2D data
         np.save(os.path.join(outdir_scan, "xrd_twod.npy"), img)
         s["xrd_twod_shape"] = list(img.shape)
         s["xrd_twod_stored"] = "embedded"
-    else:
-        if safe_attr(xrd, "twod_is_hdf", False):
-            s["xrd_twod_stored"] = "external_hdf"
-            s["xrd_twod_source_file"] = safe_attr(xrd, "twod_source_file")
+        s["xrd_twod_source_file"] = source_file
+    elif source_file and is_embedded is False:
+        # External reference (2D exists but not embedded)
+        s["xrd_twod_stored"] = "external"
+        s["xrd_twod_source_file"] = source_file
+
+        is_hdf = safe_attr(xrd, "twod_is_hdf", False)
+        is_edf = safe_attr(xrd, "twod_is_edf", False)
+        if is_hdf:
+            s["xrd_twod_format"] = "hdf"
+        elif is_edf:
+            s["xrd_twod_format"] = "edf"
 
 
 def extract_neutron(scan_grp, outdir_scan: str, s: Dict[str, Any]):
@@ -161,18 +178,25 @@ def extract_neutron(scan_grp, outdir_scan: str, s: Dict[str, Any]):
             continue
         b = ng[name]
         info = {"bank": name}
+
+        # TOF data
         tof = safe_data(b, "tof")
         tofi = safe_data(b, "tof_intensity")
         if tof is not None and tofi is not None and len(tof) == len(tofi):
             write_csv(os.path.join(outdir_scan, f"{name}_tof.csv"),
                       ["tof", "intensity"], np.column_stack([tof, tofi]))
             info["tof_points"] = int(len(tof))
+            info["tof_source"] = safe_attr(b, "tof_source_file")
+
+        # d-spacing data
         d = safe_data(b, "d_spacing")
         di = safe_data(b, "d_intensity")
         if d is not None and di is not None and len(d) == len(di):
             write_csv(os.path.join(outdir_scan, f"{name}_d.csv"),
                       ["d_spacing", "intensity"], np.column_stack([d, di]))
             info["d_points"] = int(len(d))
+            info["d_source"] = safe_attr(b, "d_source_file")
+
         if len(info) > 1:
             banks.append(info)
 
@@ -182,7 +206,9 @@ def extract_metadata(scan_grp, s: Dict[str, Any]):
         return
     md = scan_grp["metadata"]
     md_out = {}
-    for key in ["scan_timestamp", "midpoint_adjusted_timestamp", "voltage_timestamp", "exposure_time"]:
+
+    # Timestamps
+    for key in ["scan_timestamp", "midpoint_adjusted_timestamp", "voltage_timestamp"]:
         v = safe_data(md, key)
         if v is None:
             continue
@@ -190,51 +216,37 @@ def extract_metadata(scan_grp, s: Dict[str, Any]):
             v = v.decode("utf-8", errors="ignore")
         md_out[key] = v.tolist() if hasattr(v, "tolist") else v
 
-    # Handle voltage with various naming conventions
-    v = safe_data(md, "voltage (V)")
-    if v is None:
-        v = safe_data(md, "voltage")
-    if v is not None:
+    # Exposure time
+    exp_time = safe_data(md, "exposure_time")
+    if exp_time is not None:
         try:
-            md_out["voltage"] = float(np.array(v).squeeze())
+            md_out["exposure_time"] = float(np.array(exp_time).squeeze())
         except Exception:
-            md_out["voltage"] = v
+            md_out["exposure_time"] = exp_time
 
-    # Handle current with various naming conventions
-    c = safe_data(md, "current (mA)")
-    if c is None:
-        c = safe_data(md, "current")
-    if c is not None:
-        try:
-            md_out["current"] = float(np.array(c).squeeze())
-        except Exception:
-            md_out["current"] = c
+    # Voltage and current with units
+    for key in ["voltage (V)", "current (mA)"]:
+        v = safe_data(md, key)
+        if v is not None:
+            try:
+                md_out[key] = float(np.array(v).squeeze())
+            except Exception:
+                md_out[key] = v
 
     if md_out:
         s["metadata"] = md_out
 
 
-def extract_echem_global(h5file, outdir_root: str, summary: Dict[str, Any]):
+def extract_operando_echem(h5file, outdir_root: str, summary: Dict[str, Any]):
     """Extract operando electrochemistry data."""
-    # Try new name first, then fall back to old name
-    e = None
-    if "operando_electrochemistry" in h5file:
-        e = h5file["operando_electrochemistry"]
-    elif "electrochemistry" in h5file:
-        e = h5file["electrochemistry"]
-
-    if e is None:
+    if "operando_electrochemistry" not in h5file:
+        summary["operando_echem_points"] = 0
         return
 
+    e = h5file["operando_electrochemistry"]
     ts = safe_data(e, "timestamps")
-
     v = safe_data(e, "voltage (V)")
-    if v is None:
-        v = safe_data(e, "voltage")
-
     i = safe_data(e, "current (mA)")
-    if i is None:
-        i = safe_data(e, "current")
 
     def to1(x):
         if x is None:
@@ -242,42 +254,36 @@ def extract_echem_global(h5file, outdir_root: str, summary: Dict[str, Any]):
         return np.array(x).reshape(-1)
 
     ts, v, i = to1(ts), to1(v), to1(i)
-    summary["echem_points"] = int(0 if ts is None else ts.shape[0])
+    summary["operando_echem_points"] = int(0 if ts is None else ts.shape[0])
+
     if ts is not None and v is not None and len(ts) == len(v):
-        df = pd.DataFrame({"timestamp": ts.astype(str), "voltage": v})
+        df = pd.DataFrame({"timestamp": ts.astype(str), "voltage_V": v})
         if i is not None and len(i) == len(ts):
-            df["current"] = i
-        df.to_csv(os.path.join(outdir_root, "echem_timeseries.csv"), index=False)
+            df["current_mA"] = i
+        df.to_csv(os.path.join(outdir_root, "operando_echem.csv"), index=False)
 
 
 def extract_standard_echem(h5file, outdir_root: str, summary: Dict[str, Any]):
-    """Extract standard electrochemistry data (separate files, not time-correlated)."""
+    """Extract standard electrochemistry data files."""
     if "standard_electrochemistry" not in h5file:
         summary["standard_echem_files"] = 0
         return
 
-    std_container = h5file["standard_electrochemistry"]
-    std_outdir = os.path.join(outdir_root, "standard_echem")
-    ensure_dir(std_outdir)
+    se = h5file["standard_electrochemistry"]
+    num_files = safe_attr(se, "num_files", 0)
+    summary["standard_echem_files"] = num_files
 
-    file_count = 0
-    for group_name in sorted(std_container.keys()):
-        if not group_name.startswith("file_"):
+    extracted = []
+    for file_name in se.keys():
+        if not file_name.startswith("file_"):
             continue
 
-        file_group = std_container[group_name]
-        if not isinstance(file_group, h5py.Group):
-            continue
+        file_grp = se[file_name]
+        source_file = safe_attr(file_grp, "source_file", file_name)
 
-        ts = safe_data(file_group, "timestamps")
-
-        v = safe_data(file_group, "voltage (V)")
-        if v is None:
-            v = safe_data(file_group, "voltage")
-
-        i = safe_data(file_group, "current (mA)")
-        if i is None:
-            i = safe_data(file_group, "current")
+        ts = safe_data(file_grp, "timestamps")
+        v = safe_data(file_grp, "voltage (V)")
+        i = safe_data(file_grp, "current (mA)")
 
         def to1(x):
             if x is None:
@@ -287,13 +293,20 @@ def extract_standard_echem(h5file, outdir_root: str, summary: Dict[str, Any]):
         ts, v, i = to1(ts), to1(v), to1(i)
 
         if ts is not None and v is not None and len(ts) == len(v):
-            df = pd.DataFrame({"timestamp": ts.astype(str), "voltage": v})
+            df = pd.DataFrame({"timestamp": ts.astype(str), "voltage_V": v})
             if i is not None and len(i) == len(ts):
-                df["current"] = i
-            df.to_csv(os.path.join(std_outdir, f"{group_name}.csv"), index=False)
-            file_count += 1
+                df["current_mA"] = i
 
-    summary["standard_echem_files"] = file_count
+            output_name = f"standard_echem_{file_name}.csv"
+            df.to_csv(os.path.join(outdir_root, output_name), index=False)
+
+            extracted.append({
+                "file": file_name,
+                "source": source_file,
+                "points": len(ts)
+            })
+
+    summary["standard_echem_extracted"] = extracted
 
 
 def print_global_metadata_summary(gm: Dict[str, Any]):
@@ -307,7 +320,7 @@ def print_global_metadata_summary(gm: Dict[str, Any]):
     # Root attributes
     attrs = gm.get("_attributes", {})
     if attrs:
-        print(f"       attributes: {len(attrs)} fields")
+        print(f"       root attributes: {len(attrs)} fields")
         for k in ["total_scans", "data_source", "generator", "generator_version"]:
             if k in attrs:
                 print(f"         {k}: {attrs[k]}")
@@ -320,6 +333,11 @@ def print_global_metadata_summary(gm: Dict[str, Any]):
         n_attrs = len(subgroup.get("_attributes", {}))
         n_datasets = len(subgroup.get("_datasets", {}))
         print(f"       {key}: {n_attrs} attrs, {n_datasets} datasets")
+
+        # Show source file if available
+        source = subgroup.get("_attributes", {}).get("source_file")
+        if source:
+            print(f"         source: {source}")
 
 
 def main():
@@ -357,11 +375,12 @@ def main():
 
         # Per-file root
         file_root = outdir
-        # Global echem (operando)
-        extract_echem_global(f, file_root, summary)
-        # Standard echem (separate files)
+
+        # Extract electrochemistry data
+        extract_operando_echem(f, file_root, summary)
         extract_standard_echem(f, file_root, summary)
 
+        # Process scans
         for scan_name in scan_names:
             scan_grp = f[scan_name]
             scan_num = int(scan_name.split("_")[1])
@@ -392,25 +411,42 @@ def main():
     # Print global metadata summary
     print_global_metadata_summary(summary.get("global_metadata"))
 
-    # Print echem summary
-    if summary.get("echem_points", 0) > 0:
-        print(f"     operando_echem: {summary['echem_points']} points")
-    if summary.get("standard_echem_files", 0) > 0:
-        print(f"     standard_echem: {summary['standard_echem_files']} files")
+    # Print electrochemistry summary
+    if summary.get("operando_echem_points", 0) > 0:
+        print(f"     operando electrochemistry: {summary['operando_echem_points']} points")
 
+    if summary.get("standard_echem_files", 0) > 0:
+        print(f"     standard electrochemistry: {summary['standard_echem_files']} files")
+        for item in summary.get("standard_echem_extracted", []):
+            print(f"       - {item['source']}: {item['points']} points")
+
+    # Print scan details
     for s in summary["scans"]:
         bits = [s["scan_group"]]
+
+        # XRD info
         if "xrd_oned_points" in s:
             bits.append(f"1D={s['xrd_oned_points']}pts")
         if s.get("xrd_twod_stored") == "embedded":
             bits.append(f"2D={s.get('xrd_twod_shape')}")
-        elif s.get("xrd_twod_stored") == "external_hdf":
-            bits.append("2D=external(HDF)")
+        elif s.get("xrd_twod_stored") == "external":
+            fmt = s.get("xrd_twod_format", "unknown")
+            bits.append(f"2D=external({fmt})")
+
+        # Metadata
         md = s.get("metadata", {})
-        if "voltage" in md:
-            bits.append(f"V={md['voltage']}")
-        if "current" in md:
-            bits.append(f"I={md['current']}")
+        if "voltage (V)" in md:
+            bits.append(f"V={md['voltage (V)']}")
+        if "current (mA)" in md:
+            bits.append(f"I={md['current (mA)']}")
+        if "exposure_time" in md:
+            bits.append(f"exp={md['exposure_time']}s")
+
+        # Neutron banks
+        banks = s.get("neutron_banks", [])
+        if banks:
+            bits.append(f"neutron={len(banks)}banks")
+
         print("     - " + " | ".join(bits))
 
 
