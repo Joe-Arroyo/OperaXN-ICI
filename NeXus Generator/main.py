@@ -48,6 +48,8 @@ MAX_WORKERS = 8
 PARALLEL_PROCESSING = True
 BATCH_SIZE = 20
 SYNCHROTRON_MAX_DISPLAY_SIZE = 4096
+MAX_DATASET_ELEMENTS = 50_000_000
+TARGET_DISPLAY_PIXELS = 2048 * 2048
 
 # Metadata exclusion fields
 EDF_EXCLUDE_FIELDS = {
@@ -69,8 +71,8 @@ def convert_xlsx_to_txt(xlsx_path: str) -> str:
     try:
         df = pd.read_excel(xlsx_path)
         base_name = os.path.splitext(os.path.basename(xlsx_path))[0]
-        temp_dir = tempfile.gettempdir()
-        txt_path = os.path.join(temp_dir, f"{base_name}_converted.txt")
+        fd, txt_path = tempfile.mkstemp(prefix=f"{base_name}_", suffix=".txt")
+        os.close(fd)
         df.to_csv(txt_path, sep='\t', index=False)
         logger.info(f"Converted {os.path.basename(xlsx_path)} to txt format")
         return txt_path
@@ -87,8 +89,8 @@ def convert_csv_to_txt(csv_path: str) -> str:
     try:
         df = pd.read_csv(csv_path)
         base_name = os.path.splitext(os.path.basename(csv_path))[0]
-        temp_dir = tempfile.gettempdir()
-        txt_path = os.path.join(temp_dir, f"{base_name}_converted.txt")
+        fd, txt_path = tempfile.mkstemp(prefix=f"{base_name}_", suffix=".txt")
+        os.close(fd)
         df.to_csv(txt_path, sep='\t', index=False)
         logger.info(f"Converted {os.path.basename(csv_path)} to txt format")
         return txt_path
@@ -329,7 +331,7 @@ class HDFReader(DataReader):
         for data_path in self.COMMON_DATA_PATHS:
             if data_path in h5file:
                 dataset = h5file[data_path]
-                if dataset.size > 50_000_000:
+                if dataset.size > MAX_DATASET_ELEMENTS:
                     return self._sample_large_dataset(dataset)
                 else:
                     return np.array(dataset)
@@ -349,7 +351,7 @@ class HDFReader(DataReader):
 
         if largest_dataset:
             dataset = h5file[largest_dataset]
-            if dataset.size > 50_000_000:
+            if dataset.size > MAX_DATASET_ELEMENTS:
                 return self._sample_large_dataset(dataset)
             else:
                 return np.array(dataset)
@@ -358,20 +360,21 @@ class HDFReader(DataReader):
 
     @staticmethod
     def _sample_large_dataset(dataset: h5py.Dataset) -> np.ndarray:
-        """Sample very large dataset for initial loading."""
         if dataset.ndim == 3:
-            data = dataset[0]
+            slice_size = dataset.shape[1] * dataset.shape[2]
         else:
-            data = dataset
+            slice_size = dataset.shape[0] * dataset.shape[1]
 
-        if data.size > 50_000_000:
-            step = max(1, int(np.sqrt(data.size / (2048 * 2048))))
+        if slice_size > MAX_DATASET_ELEMENTS:
+            step = max(1, int(np.sqrt(slice_size / TARGET_DISPLAY_PIXELS)))
             if dataset.ndim == 2:
                 return np.array(dataset[::step, ::step])
             else:
                 return np.array(dataset[0, ::step, ::step])
 
-        return np.array(data)
+        if dataset.ndim == 3:
+            return np.array(dataset[0])
+        return np.array(dataset)
 
     def _process_data_shape(self, data: np.ndarray) -> np.ndarray:
         """Process data array to ensure 2D shape."""
@@ -549,7 +552,7 @@ class EDFClassifier(FileClassifierBase):
 class TXTClassifier(FileClassifierBase):
     """Classifier for TXT files (electrochemistry data OR neutron metadata)."""
 
-    ECHEM_KEYWORDS = ["time", "ecell", "voltage", "current", "i/", "ewe", "v/"]
+    ECHEM_KEYWORDS = ["time", "absolute", "ecell", "voltage", "current", "i/", "ewe", "v/"]
 
     @lru_cache(maxsize=128)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
@@ -1166,7 +1169,7 @@ class EchemParser:
         """Detect column indices from header."""
         header_parts = [part.strip().lower() for part in header_line.strip().split("\t")]
 
-        columns = {"time": 0, "voltage": 1, "current": 2}
+        detected: Dict[str, int] = {}
 
         column_mapping: Dict[str, str] = {}
         for col_type, patterns in self.COLUMN_PATTERNS.items():
@@ -1177,13 +1180,26 @@ class EchemParser:
             clean_part = part.replace("(", "").replace(")", "").replace("/", "").replace(" ", "")
 
             if clean_part in column_mapping:
-                columns[column_mapping[clean_part]] = i
+                detected[column_mapping[clean_part]] = i
                 continue
 
             for key, value in column_mapping.items():
                 if key in part:
-                    columns[value] = i
+                    detected[value] = i
                     break
+
+        # Fall back to positional defaults only for undetected columns
+        columns = {"time": 0, "voltage": 1, "current": 2}
+        columns.update(detected)
+
+        used_indices = set(detected.values())
+        for col_name in columns:
+            if col_name not in detected and columns[col_name] in used_indices:
+                logger.warning(
+                    f"Default column '{col_name}' at index {columns[col_name]} "
+                    f"collides with detected column. Disabling."
+                )
+                columns[col_name] = -1
 
         return columns
 
@@ -1214,7 +1230,7 @@ class EchemParser:
                 continue
 
             current = None
-            if len(parts) > columns["current"]:
+            if 0 <= columns["current"] < len(parts):
                 try:
                     current = float(parts[columns["current"]])
                 except (ValueError, IndexError):
