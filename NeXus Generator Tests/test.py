@@ -145,18 +145,18 @@ def extract_xrd(scan_grp, outdir_scan: str, s: Dict[str, Any]):
     # 2D data - check if embedded or external
     img = safe_data(xrd, "twod_image")
     is_embedded = safe_attr(xrd, "twod_embedded")
-    source_file = safe_attr(xrd, "twod_source_file")
+    source_file = safe_attr(xrd, "twod_source")
 
     if img is not None and is_embedded:
         # Embedded 2D data
         np.save(os.path.join(outdir_scan, "xrd_twod.npy"), img)
         s["xrd_twod_shape"] = list(img.shape)
         s["xrd_twod_stored"] = "embedded"
-        s["xrd_twod_source_file"] = source_file
+        s["xrd_twod_source"] = source_file
     elif source_file and is_embedded is False:
         # External reference (2D exists but not embedded)
         s["xrd_twod_stored"] = "external"
-        s["xrd_twod_source_file"] = source_file
+        s["xrd_twod_source"] = source_file
 
         is_hdf = safe_attr(xrd, "twod_is_hdf", False)
         is_edf = safe_attr(xrd, "twod_is_edf", False)
@@ -164,6 +164,14 @@ def extract_xrd(scan_grp, outdir_scan: str, s: Dict[str, Any]):
             s["xrd_twod_format"] = "hdf"
         elif is_edf:
             s["xrd_twod_format"] = "edf"
+
+    original_shape = safe_attr(xrd, "twod_original_shape")
+    if original_shape is not None:
+        s["xrd_twod_original_shape"] = list(original_shape) if hasattr(original_shape, '__iter__') else original_shape
+
+    max_display = safe_attr(xrd, "twod_max_display_size")
+    if max_display is not None:
+        s["xrd_twod_max_display_size"] = max_display
 
 
 def extract_neutron(scan_grp, outdir_scan: str, s: Dict[str, Any]):
@@ -321,7 +329,8 @@ def print_global_metadata_summary(gm: Dict[str, Any]):
     attrs = gm.get("_attributes", {})
     if attrs:
         print(f"       root attributes: {len(attrs)} fields")
-        for k in ["total_scans", "data_source", "generator", "generator_version"]:
+        for k in ["total_scans", "data_source", "generator", "generator_version",
+                  "twod_included", "twod_max_display_size"]:
             if k in attrs:
                 print(f"         {k}: {attrs[k]}")
 
@@ -428,7 +437,10 @@ def main():
         if "xrd_oned_points" in s:
             bits.append(f"1D={s['xrd_oned_points']}pts")
         if s.get("xrd_twod_stored") == "embedded":
-            bits.append(f"2D={s.get('xrd_twod_shape')}")
+            shape_str = f"2D={s.get('xrd_twod_shape')}"
+            if "xrd_twod_original_shape" in s and s["xrd_twod_original_shape"] != s.get("xrd_twod_shape"):
+                shape_str += f" (original={s['xrd_twod_original_shape']})"
+            bits.append(shape_str)
         elif s.get("xrd_twod_stored") == "external":
             fmt = s.get("xrd_twod_format", "unknown")
             bits.append(f"2D=external({fmt})")
