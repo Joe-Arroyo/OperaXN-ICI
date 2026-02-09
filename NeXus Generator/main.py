@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 # ============================================================================
-# Logging Configuration
+# Logging Config
 # ============================================================================
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -48,8 +48,8 @@ MAX_WORKERS = 8
 PARALLEL_PROCESSING = True
 BATCH_SIZE = 20
 SYNCHROTRON_MAX_DISPLAY_SIZE = 4096
-MAX_DATASET_ELEMENTS = 50_000_000
 TARGET_DISPLAY_PIXELS = 2048 * 2048
+MAX_DATASET_ELEMENTS = 100_000_000
 CLASSIFIER_CACHE_SIZE = 128
 
 # Metadata exclusion fields
@@ -101,7 +101,7 @@ def convert_csv_to_txt(csv_path: str) -> str:
 
 
 def _nan_to_none(value: Any) -> Any:
-    """Convert NaN/NaT values to None for safe use outside pandas."""
+    """Convert NaN/NaT values to None."""
     if value is None:
         return None
     try:
@@ -158,7 +158,7 @@ class NXSConfig:
     echem_time_tolerance: int = ECHEM_TIME_TOLERANCE
     max_workers: int = MAX_WORKERS
     parallel_processing: bool = PARALLEL_PROCESSING
-    synchrotron_max_display_size: int = SYNCHROTRON_MAX_DISPLAY_SIZE
+    synchrotron_max_display_size: int = 0
     include_2d_images: bool = False
 
 
@@ -323,6 +323,7 @@ class HDFReader(DataReader):
 
     def __init__(self):
         super().__init__()
+        self.original_shape: Optional[Tuple[int, ...]] = None
 
     def _read_impl(self, path: str) -> np.ndarray:
         """Read HDF file as 2D array."""
@@ -335,6 +336,7 @@ class HDFReader(DataReader):
 
                 data = self._process_data_shape(data)
                 data = self._apply_floor_clipping(data)
+                self.original_shape = data.shape
                 data = self._downsample_if_needed(data)
 
                 return data
@@ -424,13 +426,13 @@ class HDFReader(DataReader):
         return data
 
     def _downsample_if_needed(self, data: np.ndarray) -> np.ndarray:
-        """Downsample data if larger than max display size."""
-        height, width = data.shape
         max_size = config.synchrotron_max_display_size
+        if max_size <= 0:
+            return data
 
+        height, width = data.shape
         if height > max_size or width > max_size:
             return self._downsample_for_display(data, max_size)
-
         return data
 
     @staticmethod
@@ -2065,6 +2067,15 @@ class NXSWriter:
             global_meta.attrs['generator'] = APP_NAME
             global_meta.attrs['generator_version'] = APP_VERSION
 
+            if config.include_2d_images:
+                global_meta.attrs['twod_included'] = True
+                if config.synchrotron_max_display_size > 0:
+                    global_meta.attrs['twod_max_display_size'] = config.synchrotron_max_display_size
+                else:
+                    global_meta.attrs['twod_max_display_size'] = 'full_resolution'
+            else:
+                global_meta.attrs['twod_included'] = False
+
             # Extract metadata from first scan's source file
             if scans:
                 first_scan = scans[0]
@@ -2169,15 +2180,23 @@ class NXSWriter:
         xrd_group.attrs["twod_is_hdf"] = is_hdf
         xrd_group.attrs["twod_is_edf"] = is_edf
 
+        if config.synchrotron_max_display_size > 0:
+            xrd_group.attrs["twod_max_display_size"] = config.synchrotron_max_display_size
+        else:
+            xrd_group.attrs["twod_max_display_size"] = "full_resolution"
+
         if not config.include_2d_images:
             xrd_group.attrs["twod_embedded"] = False
             return
 
         try:
             if is_hdf:
-                data_2d = HDFReader().read(twod_path)
+                hdf_reader = HDFReader()
+                data_2d = hdf_reader.read(twod_path)
+                xrd_group.attrs["twod_original_shape"] = hdf_reader.original_shape
             else:
                 data_2d = reader_factory.read_file(twod_path)
+                xrd_group.attrs["twod_original_shape"] = data_2d.shape
 
             xrd_group.create_dataset("twod_image", data=data_2d)
             xrd_group.attrs["twod_embedded"] = True
@@ -2273,6 +2292,7 @@ class NXSGeneratorGUI:
     """Tkinter GUI for NeXus file generation."""
 
     def __init__(self, root: tk.Tk):
+        self.display_size_combo = None
         self.include_2d_check: Optional[ttk.Checkbutton] = None
         self.progress_label: Optional[ttk.Label] = None
         self.generate_btn: Optional[ttk.Button] = None
@@ -2291,6 +2311,7 @@ class NXSGeneratorGUI:
         self.time_method = tk.StringVar(value="absolute")
         self.progress_text = tk.StringVar(value="Ready")
         self.include_2d_images = tk.BooleanVar(value=False)
+        self.max_display_size = tk.StringVar(value="No downsampling")
 
         self.setup_ui()
 
@@ -2322,7 +2343,7 @@ class NXSGeneratorGUI:
         ttk.Entry(input_frame, textvariable=self.input_path).grid(
             row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
 
-        ttk.Button(input_frame, text="Select File",
+        ttk.Button(input_frame, text="Select File/Zip",
                    command=self.select_file).grid(row=0, column=1, padx=(0, 5))
 
         ttk.Button(input_frame, text="Select Directory",
@@ -2366,16 +2387,16 @@ class NXSGeneratorGUI:
         time_frame = ttk.Frame(main_frame)
         time_frame.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=(0, 10))
 
-        ttk.Radiobutton(time_frame, text="Absolute Time (use actual timestamps)",
+        ttk.Radiobutton(time_frame, text="Absolute time (use actual timestamps)",
                         variable=self.time_method, value="absolute").grid(row=0, column=0, padx=5)
-        ttk.Radiobutton(time_frame, text="Relative Time (start from 00:00:00)",
+        ttk.Radiobutton(time_frame, text="Relative time (start from 00:00:00)",
                         variable=self.time_method, value="relative").grid(row=0, column=1, padx=5)
 
         # 2D image options
         ttk.Separator(main_frame, orient='horizontal').grid(
             row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
 
-        ttk.Label(main_frame, text="2D Image Options:", font=('Helvetica', 10, 'bold')).grid(
+        ttk.Label(main_frame, text="2D Image Settings (Optional):", font=('Helvetica', 10, 'bold')).grid(
             row=10, column=0, sticky=tk.W, pady=(5, 5))
 
         options_frame = ttk.Frame(main_frame)
@@ -2383,10 +2404,22 @@ class NXSGeneratorGUI:
 
         self.include_2d_check = ttk.Checkbutton(
             options_frame,
-            text="Include 2D detector images in NeXus (increases file size)",
-            variable=self.include_2d_images
+            text="Include 2D detector images in NeXus",
+            variable=self.include_2d_images,
+            command=self._update_2d_options
         )
         self.include_2d_check.grid(row=0, column=0, padx=5)
+
+        self.display_size_combo = ttk.Combobox(
+            options_frame,
+            textvariable=self.max_display_size,
+            values=["No downsampling", "4096", "2048", "1024", "512"],
+            state="readonly"
+        )
+        self.display_size_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+
+        ttk.Label(options_frame, text="Set max 2D data shape (n x n)").grid(
+            row=0, column=2, sticky=tk.W)
 
         # Initially disable synchrotron options
         self._update_2d_options()
@@ -2439,14 +2472,17 @@ class NXSGeneratorGUI:
         self._update_2d_options()
 
     def _update_2d_options(self) -> None:
-        """Enable/disable 2D image option depending on source."""
         if self.include_2d_check is None:
             return
-        if self.data_source.get() in ("synchrotron", "inhouse"):
-            self.include_2d_check.config(state='normal')
-        else:
-            self.include_2d_check.config(state='disabled')
+        has_2d = self.data_source.get() in ("synchrotron", "inhouse")
+
+        self.include_2d_check.config(state='normal' if has_2d else 'disabled')
+        if not has_2d:
             self.include_2d_images.set(False)
+
+        combo_active = has_2d and self.include_2d_images.get()
+        if hasattr(self, 'display_size_combo'):
+            self.display_size_combo.config(state='readonly' if combo_active else 'disabled')
 
     def select_file(self) -> None:
         """Open dialog for single file selection."""
@@ -2574,6 +2610,12 @@ class NXSGeneratorGUI:
 
             # Get standard echem files if any
             std_echem_files = self.standard_echem_files if self.standard_echem_files else None
+
+            size_val = self.max_display_size.get()
+            if size_val == "No downsampling":
+                config.synchrotron_max_display_size = 0
+            else:
+                config.synchrotron_max_display_size = int(size_val)
 
             # Create generator
             generator = NXSGenerator(source_type)
