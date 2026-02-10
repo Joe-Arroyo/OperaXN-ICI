@@ -1,6 +1,4 @@
-"""
-NeXus Generator
-"""
+"""NeXus Generator."""
 
 import logging
 import os
@@ -14,7 +12,6 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
-from functools import lru_cache
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -23,36 +20,30 @@ import h5py
 import numpy as np
 import pandas as pd
 
-# ============================================================================
-# Logging Config
-# ============================================================================
+# --- Logging ---
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+# --- Constants ---
 
-# ============================================================================
-# Application Constants
-# ============================================================================
 APP_NAME = "OPERAXN NeXus File Generator"
 APP_VERSION = "1.0.0"
 
+# --- Configuration ---
 
-# ============================================================================
-# Configuration
-# ============================================================================
-ECHEM_TIME_TOLERANCE = 300  # 5 minutes
+ECHEM_TIME_TOLERANCE = 300  # seconds
 MAX_WORKERS = 8
 PARALLEL_PROCESSING = True
 BATCH_SIZE = 20
 SYNCHROTRON_MAX_DISPLAY_SIZE = 4096
 TARGET_DISPLAY_PIXELS = 2048 * 2048
 MAX_DATASET_ELEMENTS = 100_000_000
-CLASSIFIER_CACHE_SIZE = 128
 
-# Metadata exclusion fields
+# Header fields excluded from global metadata extraction
 EDF_EXCLUDE_FIELDS = {
     'Date', 'ExposureTime', 'Image', 'Monitor', 'Intensity1', 'title',
     'SumForIntensity1', 'TransmittedFlux', 'Saturation',
@@ -61,11 +52,10 @@ EDF_EXCLUDE_FIELDS = {
 NXS_EXCLUDE_FIELDS = {'start_time', 'end_time', 'count_time', 'scan_identifier'}
 
 
-# ============================================================================
-# Utility Functions
-# ============================================================================
+# --- Utility Functions ---
+
 def convert_xlsx_to_txt(xlsx_path: str) -> str:
-    """Convert xlsx file to txt format"""
+    """Convert .xlsx to tab-delimited .txt; returns original path on failure."""
     if not xlsx_path.lower().endswith('.xlsx'):
         return xlsx_path
 
@@ -83,7 +73,7 @@ def convert_xlsx_to_txt(xlsx_path: str) -> str:
 
 
 def convert_csv_to_txt(csv_path: str) -> str:
-    """Convert csv file to txt format"""
+    """Convert .csv to tab-delimited .txt; returns original path on failure."""
     if not csv_path.lower().endswith('.csv'):
         return csv_path
 
@@ -101,7 +91,7 @@ def convert_csv_to_txt(csv_path: str) -> str:
 
 
 def _nan_to_none(value: Any) -> Any:
-    """Convert NaN/NaT values to None."""
+    """Convert NaN/NaT to None for safe HDF5 storage."""
     if value is None:
         return None
     try:
@@ -112,18 +102,15 @@ def _nan_to_none(value: Any) -> Any:
     return value
 
 
-# ============================================================================
-# Data Models and Enums
-# ============================================================================
+# --- Data Models ---
+
 class DataSourceType(Enum):
-    """Types of data sources."""
     INHOUSE = "inhouse"
     SYNCHROTRON = "synchrotron"
     NEUTRON = "neutron"
 
 
 class FileType(Enum):
-    """Supported file types."""
     DAT = ".dat"
     EDF = ".edf"
     TXT = ".txt"
@@ -139,7 +126,6 @@ SUPPORTED_EXTENSIONS = {ft.value for ft in FileType}
 
 
 class DataType(Enum):
-    """Types of data."""
     ONED = "oned"
     TWOD = "twod"
     ECHEM = "echem"
@@ -147,14 +133,12 @@ class DataType(Enum):
 
 
 class TimeMethod(Enum):
-    """Time correlation methods."""
     ABSOLUTE = "absolute"
     RELATIVE = "relative"
 
 
 @dataclass
 class NXSConfig:
-    """Configuration for NeXus generation."""
     echem_time_tolerance: int = ECHEM_TIME_TOLERANCE
     max_workers: int = MAX_WORKERS
     parallel_processing: bool = PARALLEL_PROCESSING
@@ -167,7 +151,7 @@ config = NXSConfig()
 
 @dataclass
 class FileRecord:
-    """Represents a processed file record."""
+    """Single file with its classification and extracted metadata."""
     path: str
     original_path: str
     oned: Optional[str] = None
@@ -182,7 +166,7 @@ class FileRecord:
 
 @dataclass
 class Scan:
-    """Represents a complete scan with all associated data."""
+    """A complete scan entry with all correlated data across sources."""
     scan_num: int
     oned: Optional[str] = None
     twod: Optional[str] = None
@@ -202,33 +186,29 @@ class Scan:
     timestamp_for_correlation: Optional[pd.Timestamp] = None
 
 
-# ============================================================================
-# Data Readers
-# ============================================================================
+# --- Data Readers ---
+
 class DataReader(ABC):
-    """Abstract base class for data readers."""
+    """Base class for all file format readers."""
 
     @abstractmethod
     def _read_impl(self, path: str) -> np.ndarray:
-        """Implementation of file reading."""
         pass
 
     def read(self, path: str) -> np.ndarray:
-        """Read data from file."""
         return self._read_impl(path)
 
 
 class DATReader(DataReader):
-    """Reader for DAT files (XRD and neutron)."""
+    """Reads .dat files (XRD or neutron) as two-column arrays."""
 
     def __init__(self, data_type: str = "xrd"):
         super().__init__()
         self.data_type = data_type
 
     def _read_impl(self, path: str) -> np.ndarray:
-        """Read DAT file as 2-column array."""
         try:
-            # Try fast numpy loading first
+            # Fast path: numpy bulk load
             try:
                 data = np.loadtxt(path, comments='#')
                 if data.ndim == 1:
@@ -237,7 +217,7 @@ class DATReader(DataReader):
             except (ValueError, IOError, OSError) as e:
                 logger.debug(f"NumPy loadtxt failed for {path}: {e}")
 
-            # Fallback to manual parsing
+            # Slow path: line-by-line parsing
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
 
@@ -274,10 +254,9 @@ class DATReader(DataReader):
 
 
 class EDFReader(DataReader):
-    """Reader for EDF files."""
+    """Reads .edf detector images as 2D arrays with floor clipping."""
 
     def _read_impl(self, path: str) -> np.ndarray:
-        """Read EDF file as 2D array."""
         try:
             arr = np.asarray(fabio.open(path).data.astype(float))
             pos = arr > 0
@@ -288,10 +267,9 @@ class EDFReader(DataReader):
 
 
 class XYReader(DataReader):
-    """Reader for XY files (synchrotron integrated data)."""
+    """Reads .xy integrated diffraction data as two-column arrays."""
 
     def _read_impl(self, path: str) -> np.ndarray:
-        """Read XY file as 2-column array."""
         try:
             data = np.loadtxt(path)
             if data.ndim == 1:
@@ -302,7 +280,7 @@ class XYReader(DataReader):
 
 
 class HDFReader(DataReader):
-    """Reader for HDF5 files (synchrotron 2D detector images) with optional downsampling."""
+    """Reads HDF5 detector images with auto-discovery and optional downsampling."""
 
     COMMON_DATA_PATHS = [
         '/entry/instrument/detector/data',
@@ -315,7 +293,7 @@ class HDFReader(DataReader):
     ]
 
     DETECTOR_SIZES = [
-        (2880, 2881),  # Pixium detector
+        (2880, 2881),
         (2048, 2048),
         (1024, 1024),
         (512, 512),
@@ -326,7 +304,6 @@ class HDFReader(DataReader):
         self.original_shape: Optional[Tuple[int, ...]] = None
 
     def _read_impl(self, path: str) -> np.ndarray:
-        """Read HDF file as 2D array."""
         try:
             with h5py.File(path, 'r', swmr=True) as f:
                 data = self._find_data_array(f)
@@ -344,7 +321,7 @@ class HDFReader(DataReader):
             raise IOError(f"Error reading HDF file {path}: {e}")
 
     def _find_data_array(self, h5file: h5py.File) -> Optional[np.ndarray]:
-        """Find the main data array in HDF file."""
+        """Try known paths first, then fall back to largest 2D/3D dataset."""
         for data_path in self.COMMON_DATA_PATHS:
             if data_path in h5file:
                 dataset = h5file[data_path]
@@ -353,7 +330,6 @@ class HDFReader(DataReader):
                 else:
                     return np.array(dataset)
 
-        # Search for largest dataset
         largest_dataset = None
         largest_size = 0
 
@@ -377,6 +353,7 @@ class HDFReader(DataReader):
 
     @staticmethod
     def _sample_large_dataset(dataset: h5py.Dataset) -> np.ndarray:
+        """Stride-sample datasets that exceed MAX_DATASET_ELEMENTS."""
         if dataset.ndim == 3:
             slice_size = dataset.shape[1] * dataset.shape[2]
         else:
@@ -394,7 +371,7 @@ class HDFReader(DataReader):
         return np.array(dataset)
 
     def _process_data_shape(self, data: np.ndarray) -> np.ndarray:
-        """Process data array to ensure 2D shape."""
+        """Ensure output is 2D: take first frame of 3D, reshape 1D."""
         if data.ndim == 3:
             return data[0]
         elif data.ndim == 1:
@@ -405,7 +382,7 @@ class HDFReader(DataReader):
             raise ValueError(f"Unsupported data shape: {data.shape}")
 
     def _reshape_1d_data(self, data: np.ndarray) -> np.ndarray:
-        """Reshape 1D data to 2D based on known detector sizes."""
+        """Reshape 1D data using known detector dimensions or square root."""
         for height, width in self.DETECTOR_SIZES:
             if data.size == height * width:
                 return data.reshape((height, width))
@@ -418,7 +395,7 @@ class HDFReader(DataReader):
 
     @staticmethod
     def _apply_floor_clipping(data: np.ndarray) -> np.ndarray:
-        """Apply floor clipping to remove noise."""
+        """Clip negative noise to the minimum positive value."""
         pos = data > 0
         if pos.any():
             floor = float(data[pos].min())
@@ -437,7 +414,7 @@ class HDFReader(DataReader):
 
     @staticmethod
     def _downsample_for_display(data: np.ndarray, max_size: int) -> np.ndarray:
-        """Downsample data to fit within max display size."""
+        """Stride-downsample to fit within max_size × max_size."""
         height, width = data.shape
 
         scale_factor = max(
@@ -453,7 +430,7 @@ class HDFReader(DataReader):
 
 
 class DataReaderFactory:
-    """Factory for creating appropriate data readers."""
+    """Returns the correct reader for a given file extension."""
 
     READERS: Dict[FileType, DataReader] = {
         FileType.EDF: EDFReader(),
@@ -466,7 +443,6 @@ class DataReaderFactory:
 
     @classmethod
     def get_reader(cls, file_path: str, is_neutron: bool = False) -> DataReader:
-        """Get appropriate reader for file."""
         if is_neutron and file_path.endswith('.dat'):
             return cls.NEUTRON_READER
 
@@ -480,29 +456,24 @@ class DataReaderFactory:
 
     @classmethod
     def read_file(cls, file_path: str, is_neutron: bool = False) -> np.ndarray:
-        """Read file using appropriate reader."""
         reader = cls.get_reader(file_path, is_neutron)
         return reader.read(file_path)
 
 
-# ============================================================================
-# File Classification
-# ============================================================================
+# --- File Classification ---
+
 class FileClassifierBase(ABC):
-    """Abstract base class for file classifiers."""
+    """Base class: returns (data_type, timestamp, exposure_time) for a file."""
 
     @abstractmethod
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify file and extract metadata."""
         pass
 
 
 class DATClassifier(FileClassifierBase):
-    """Classifier for DAT files."""
+    """Extracts 1D type, timestamp, and exposure from .dat headers."""
 
-    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify DAT file and extract metadata."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = [f.readline() for _ in range(30)]
@@ -537,11 +508,9 @@ class DATClassifier(FileClassifierBase):
 
 
 class EDFClassifier(FileClassifierBase):
-    """Classifier for EDF files."""
+    """Extracts 2D type, timestamp, and exposure from .edf headers."""
 
-    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify EDF file and extract metadata."""
         try:
             image = fabio.open(path)
 
@@ -567,13 +536,11 @@ class EDFClassifier(FileClassifierBase):
 
 
 class TXTClassifier(FileClassifierBase):
-    """Classifier for TXT files (electrochemistry data OR neutron metadata)."""
+    """Classifies .txt as electrochemistry data or neutron logbook metadata."""
 
     ECHEM_KEYWORDS = ["time", "absolute", "ecell", "voltage", "current", "i/", "ewe", "v/"]
 
-    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify TXT file as echem or neutron metadata."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = []
@@ -586,11 +553,12 @@ class TXTClassifier(FileClassifierBase):
             if not lines:
                 return None, None, None
 
+            # Check header for echem keywords
             first_line_lower = lines[0].lower()
             if any(keyword in first_line_lower for keyword in self.ECHEM_KEYWORDS):
                 return DataType.ECHEM.value, None, None
 
-            # Check for neutron metadata format
+            # Check for neutron logbook format: numeric scan ID + weekday timestamps
             weekdays = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"]
             is_neutron_logbook = False
 
@@ -616,7 +584,7 @@ class TXTClassifier(FileClassifierBase):
 
 
 class FileClassificationManager:
-    """Manages file classification and metadata extraction."""
+    """Runs classifiers on a DataFrame of files, populating type and metadata columns."""
 
     def __init__(self, data_source: DataSourceType = DataSourceType.INHOUSE):
         self.data_source = data_source
@@ -627,10 +595,9 @@ class FileClassificationManager:
         }
 
     def classify_files(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Classify files and extract metadata."""
         df = df.copy()
 
-        # Ensure columns exist with object dtype to safely hold mixed
+        # Ensure all classification columns exist
         for col in ["oned", "twod", "echem", "neutron_meta", "source_nxs"]:
             if col not in df.columns:
                 df[col] = pd.array([None] * len(df), dtype="object")
@@ -642,6 +609,7 @@ class FileClassificationManager:
             df["timestamp"] = pd.array([None] * len(df), dtype="object")
 
         for idx, row in df.iterrows():
+            # Skip already-classified rows
             if pd.notna(row["oned"]) or pd.notna(row["twod"]) or pd.notna(row["neutron_meta"]):
                 continue
 
@@ -649,6 +617,7 @@ class FileClassificationManager:
             ext = os.path.splitext(file_path)[1].lower()
 
             if self.data_source == DataSourceType.NEUTRON:
+                # Neutron mode: only classify .txt files
                 if ext == '.txt':
                     file_type = FileType(ext) if ext in SUPPORTED_EXTENSIONS else None
                     if file_type and file_type in self.classifiers:
@@ -681,11 +650,10 @@ class FileClassificationManager:
         return df
 
 
-# ============================================================================
-# Global Metadata Extraction
-# ============================================================================
+# --- Global Metadata Extraction ---
+
 def extract_edf_global_metadata(edf_path: str) -> Dict[str, Any]:
-    """Extract all metadata from EDF header as flat key-value pairs."""
+    """Extract non-excluded header fields from the first EDF file."""
     try:
         image = fabio.open(edf_path)
         metadata = {}
@@ -703,7 +671,7 @@ def extract_edf_global_metadata(edf_path: str) -> Dict[str, Any]:
 
 
 def extract_nxs_global_metadata(nxs_path: str) -> Dict[str, Any]:
-    """Extract all metadata from synchrotron NeXus file as flat key-value pairs."""
+    """Flatten all small datasets and attributes from a synchrotron .nxs file."""
     try:
         metadata: Dict[str, Any] = {}
 
@@ -734,6 +702,7 @@ def extract_nxs_global_metadata(nxs_path: str) -> Dict[str, Any]:
                     except Exception:
                         pass
 
+            # Root-level attributes
             for root_attr_name, root_attr_val in f.attrs.items():
                 decoded_val = _decode_h5_value(root_attr_val)
                 if decoded_val is not None:
@@ -749,7 +718,7 @@ def extract_nxs_global_metadata(nxs_path: str) -> Dict[str, Any]:
 
 
 def _decode_h5_value(value: Any) -> Any:
-    """Decode HDF5 value to Python type suitable for HDF5 storage."""
+    """Decode HDF5 bytes/numpy scalars to native Python types; None if too large."""
     if isinstance(value, bytes):
         return value.decode('utf-8', errors='ignore')
     elif isinstance(value, np.ndarray):
@@ -773,11 +742,10 @@ def _decode_h5_value(value: Any) -> Any:
     return value
 
 
-# ============================================================================
-# NeXus Metadata Extractor
-# ============================================================================
+# --- NeXus Metadata Extractor ---
+
 class NexusMetadataExtractor:
-    """Extracts metadata from NeXus files."""
+    """Extracts timestamps and exposure times from synchrotron .nxs files."""
 
     TIMESTAMP_PATHS = [
         '/entry1/start_time',
@@ -798,9 +766,7 @@ class NexusMetadataExtractor:
         '/entry1/instrument/detector/preset',
     ]
 
-    @lru_cache(maxsize=CLASSIFIER_CACHE_SIZE)
     def extract(self, nxs_path: str) -> Optional[Dict[str, Any]]:
-        """Extract timestamp and exposure time from NeXus file."""
         try:
             with h5py.File(nxs_path, 'r') as f:
                 metadata: Dict[str, Any] = {}
@@ -823,7 +789,6 @@ class NexusMetadataExtractor:
             return None
 
     def _extract_timestamp(self, h5file: h5py.File) -> Optional[str]:
-        """Extract timestamp from NeXus file."""
         for ts_path in self.TIMESTAMP_PATHS:
             if ts_path in h5file:
                 timestamp_str = self._decode_value(h5file[ts_path][()])
@@ -831,7 +796,7 @@ class NexusMetadataExtractor:
         return None
 
     def _extract_exposure_time(self, h5file: h5py.File) -> Optional[float]:
-        """Extract exposure time from NeXus file."""
+        """Try explicit exposure datasets, then compute from start/end times."""
         for exp_path in self.EXPOSURE_PATHS:
             if exp_path in h5file:
                 try:
@@ -860,7 +825,6 @@ class NexusMetadataExtractor:
         return None
 
     def _calculate_midpoint_timestamp(self, h5file: h5py.File) -> Optional[str]:
-        """Calculate midpoint timestamp from start and end times."""
         for start_path, end_path in self.TIME_PATH_PAIRS:
             if start_path in h5file and end_path in h5file:
                 start_str = self._decode_value(h5file[start_path][()])
@@ -882,14 +846,13 @@ class NexusMetadataExtractor:
 
     @staticmethod
     def _decode_value(value: Any) -> str:
-        """Decode value from HDF5 file."""
         if isinstance(value, bytes):
             return value.decode()
         return str(value)
 
     @staticmethod
     def _parse_nexus_timestamp(timestamp_str: str) -> str:
-        """Parse NeXus timestamp format to standard format."""
+        """Normalise ISO/NeXus timestamps to 'YYYY-MM-DD HH:MM:SS'."""
         if 'T' in timestamp_str:
             base_time = timestamp_str.split('+')[0].split('Z')[0]
             if '.' in base_time:
@@ -898,17 +861,16 @@ class NexusMetadataExtractor:
         return timestamp_str
 
 
-# ============================================================================
-# Synchrotron File Grouper
-# ============================================================================
+# --- Synchrotron File Grouper ---
+
 class SynchrotronFileGrouper:
-    """Groups synchrotron files (NXS, HDF, XY) by scan ID."""
+    """Groups related .nxs, .hdf, and .xy files by scan ID."""
 
     def group_files(self, file_dict: Dict[str, str]) -> Dict[str, Dict[str, str]]:
-        """Group related synchrotron files by scan ID."""
         groups: Dict[str, Dict[str, str]] = {}
         nxs_to_id: Dict[str, str] = {}
 
+        # First pass: index all .nxs files by scan ID
         for extracted_path, original_path in file_dict.items():
             basename = os.path.basename(extracted_path)
             ext = os.path.splitext(basename)[1].lower()
@@ -918,6 +880,7 @@ class SynchrotronFileGrouper:
                 if scan_id:
                     nxs_to_id[extracted_path] = scan_id
 
+        # Second pass: assign each file to its group
         for extracted_path, original_path in file_dict.items():
             basename = os.path.basename(extracted_path)
             ext = os.path.splitext(basename)[1].lower()
@@ -940,7 +903,7 @@ class SynchrotronFileGrouper:
 
     @staticmethod
     def _extract_scan_id(filename: str) -> Optional[str]:
-        """Extract scan ID from filename."""
+        """Extract trailing numeric ID from filename."""
         base_name = os.path.splitext(filename)[0]
         base_name = base_name.replace('_integration', '')
 
@@ -948,7 +911,7 @@ class SynchrotronFileGrouper:
         return match.group(1) if match else None
 
     def _determine_group_id(self, basename: str, ext: str, nxs_to_id: Dict[str, str]) -> Optional[str]:
-        """Determine which group a file belongs to."""
+        """Match a file to an existing .nxs scan group."""
         file_id = self._extract_scan_id(basename)
 
         if ext == '.hdf':
@@ -978,15 +941,13 @@ class SynchrotronFileGrouper:
         return None
 
 
-# ============================================================================
-# Neutron Data Processing
-# ============================================================================
+# --- Neutron Data Processing ---
+
 class NeutronMetadataParser:
-    """Parser for neutron metadata files."""
+    """Parses tab-delimited neutron logbook files into scan DataFrames."""
 
     @staticmethod
     def parse(path: str) -> Optional[pd.DataFrame]:
-        """Parse neutron metadata file and return DataFrame."""
         try:
             logger.debug(f"Parsing neutron metadata file: {path}")
 
@@ -1007,9 +968,11 @@ class NeutronMetadataParser:
                     try:
                         scan_id = parts[0].strip()
 
+                        # Expect 5–7 digit numeric scan IDs
                         if not (scan_id.isdigit() and 5 <= len(scan_id) <= 7):
                             continue
 
+                        # Find start and end timestamps by weekday prefix
                         start_time = None
                         end_time = None
 
@@ -1054,10 +1017,9 @@ class NeutronMetadataParser:
 
 
 class NeutronFileGrouper:
-    """Groups neutron files by scan ID and measurement type."""
+    """Groups .dat neutron files by scan ID → measurement number → data type (tof/d)."""
 
     def group_neutron_files(self, file_list: List[str]) -> Dict[str, Dict[str, Dict[str, str]]]:
-        """Group neutron files by scan ID and measurement type."""
         groups: Dict[str, Dict[str, Dict[str, str]]] = {}
 
         logger.debug(f"Processing {len(file_list)} neutron files")
@@ -1088,13 +1050,13 @@ class NeutronFileGrouper:
 
     @staticmethod
     def _extract_neutron_file_info(filename: str) -> Optional[Dict[str, str]]:
-        """Extract scan ID, measurement number, and type from neutron filename."""
+        """Parse scan ID, measurement number, and tof/d type from filename conventions."""
         name_no_ext = filename[:-4] if filename.endswith('.dat') else filename
         is_dspacing = '-d-' in name_no_ext or '_d_' in name_no_ext or name_no_ext.endswith(
             '_d') or name_no_ext.endswith('-d')
 
         try:
-            # POL123456-b_1-d.dat
+            # Pattern: POL123456-b_1-d.dat
             pol_pattern = r'POL(\d+)-b_(\d)'
             pol_match = re.search(pol_pattern, name_no_ext.replace('-d', '').replace('_d', ''))
 
@@ -1109,7 +1071,7 @@ class NeutronFileGrouper:
                         'type': 'd' if is_dspacing else 'tof'
                     }
 
-            # 12345-1-d.dat
+            # Pattern: 12345-1-d.dat
             pattern = r'(\d{5,7})-(\d)'
             match = re.search(pattern, name_no_ext)
 
@@ -1124,7 +1086,7 @@ class NeutronFileGrouper:
                         'type': 'd' if is_dspacing else 'tof'
                     }
 
-            # Fallback
+            # Fallback: split on hyphen
             if '-' in name_no_ext:
                 parts = name_no_ext.split('-')
                 if len(parts) >= 2:
@@ -1145,11 +1107,10 @@ class NeutronFileGrouper:
             return None
 
 
-# ============================================================================
-# Echem Parser
-# ============================================================================
+# --- Echem Parser ---
+
 class EchemParser:
-    """Parser for electrochemistry data files."""
+    """Parses tab-delimited electrochemistry files into timestamp/voltage/current DataFrames."""
 
     COLUMN_PATTERNS = {
         "time": ["time", "date"],
@@ -1158,7 +1119,6 @@ class EchemParser:
     }
 
     def parse(self, path: str) -> Optional[pd.DataFrame]:
-        """Parse echem file and return DataFrame."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -1187,7 +1147,7 @@ class EchemParser:
             return None
 
     def _detect_columns(self, header_line: str) -> Dict[str, int]:
-        """Detect column indices from header."""
+        """Map column names to indices via keyword matching."""
         header_parts = [part.strip().lower() for part in header_line.strip().split("\t")]
 
         detected: Dict[str, int] = {}
@@ -1209,10 +1169,11 @@ class EchemParser:
                     detected[value] = i
                     break
 
-        # Fall back to positional defaults only for undetected columns
+        # Default positional indices for undetected columns
         columns = {"time": 0, "voltage": 1, "current": 2}
         columns.update(detected)
 
+        # Resolve index collisions between defaults and detected columns
         used_indices = set(detected.values())
         for col_name in columns:
             if col_name not in detected and columns[col_name] in used_indices:
@@ -1226,7 +1187,6 @@ class EchemParser:
 
     @staticmethod
     def _parse_data_lines(lines: List[str], columns: Dict[str, int]) -> List[Dict[str, Any]]:
-        """Parse data lines into records."""
         data = []
 
         for line in lines:
@@ -1236,6 +1196,7 @@ class EchemParser:
             if len(parts) <= max_idx:
                 continue
 
+            # Skip epoch-zero placeholder rows
             ts_str = parts[columns["time"]]
             if ts_str.startswith("1970/01/01"):
                 continue
@@ -1266,11 +1227,10 @@ class EchemParser:
         return data
 
 
-# ============================================================================
-# File Processor
-# ============================================================================
+# --- File Processor ---
+
 class FileProcessor:
-    """File processing for all data types."""
+    """Collects, extracts, and pre-classifies files from paths, ZIPs, and directories."""
 
     def __init__(self, progress_callback: Optional[Callable[[str], None]] = None,
                  data_source: DataSourceType = DataSourceType.INHOUSE):
@@ -1290,7 +1250,7 @@ class FileProcessor:
             shutil.rmtree(self.tempdir, ignore_errors=True)
 
     def process_paths(self, selected_paths: List[str]) -> List[FileRecord]:
-        """Process selected paths."""
+        """Main entry: collect files, group source-specific ones, process the rest."""
         all_files = self._collect_all_files(selected_paths)
 
         if not all_files:
@@ -1298,6 +1258,7 @@ class FileProcessor:
 
         file_dict = {extracted: original for extracted, original in all_files}
 
+        # Source-specific grouping
         if self.data_source == DataSourceType.NEUTRON:
             records = self._process_neutron_files(all_files)
         elif self.data_source == DataSourceType.SYNCHROTRON:
@@ -1306,6 +1267,7 @@ class FileProcessor:
         else:
             records = []
 
+        # Process ungrouped files
         remaining_files = []
         for extracted_path, original_path in all_files:
             if extracted_path not in self.processed_files:
@@ -1325,7 +1287,7 @@ class FileProcessor:
         return records
 
     def _process_neutron_files(self, all_files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process neutron-specific files."""
+        """Create records for all neutron .txt and .dat files."""
         records = []
 
         for extracted_path, original_path in all_files:
@@ -1349,7 +1311,7 @@ class FileProcessor:
         return records
 
     def _collect_all_files(self, selected_paths: List[str]) -> List[Tuple[str, str]]:
-        """Collect all files from selected paths."""
+        """Recursively collect files from paths/directories, extract ZIPs, convert xlsx/csv."""
         all_files: List[Tuple[str, str]] = []
 
         for path in selected_paths:
@@ -1364,7 +1326,6 @@ class FileProcessor:
                 dir_files = self._collect_directory_files(path)
                 all_files.extend(dir_files)
 
-        # Convert xlsx/csv files to txt
         all_files = self._convert_files_to_txt(all_files)
 
         logger.info(f"Collected {len(all_files)} total files")
@@ -1372,7 +1333,7 @@ class FileProcessor:
 
     @staticmethod
     def _convert_files_to_txt(files: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-        """Convert xlsx and csv files to txt format."""
+        """Convert .xlsx and .csv to tab-delimited .txt for uniform parsing."""
         converted_files: List[Tuple[str, str]] = []
 
         for extracted_path, original_path in files:
@@ -1389,7 +1350,7 @@ class FileProcessor:
         return converted_files
 
     def _extract_zip_files(self, zip_path: str) -> List[Tuple[str, str]]:
-        """Extract relevant files from ZIP."""
+        """Extract supported files from ZIP, skipping macOS metadata."""
         extracted: List[Tuple[str, str]] = []
 
         try:
@@ -1416,7 +1377,7 @@ class FileProcessor:
         return extracted
 
     def _collect_directory_files(self, directory: str) -> List[Tuple[str, str]]:
-        """Collect all relevant files from directory."""
+        """Walk directory tree, collecting supported files and extracting nested ZIPs."""
         files: List[Tuple[str, str]] = []
 
         for root, dirs, filenames in os.walk(directory):
@@ -1438,7 +1399,7 @@ class FileProcessor:
         return files
 
     def _process_synchrotron_groups(self, synchrotron_groups: Dict[str, Dict[str, str]]) -> List[FileRecord]:
-        """Process all synchrotron groups."""
+        """Create records for each synchrotron scan group (requires .nxs anchor)."""
         records: List[FileRecord] = []
 
         for base_id, file_group in synchrotron_groups.items():
@@ -1452,7 +1413,7 @@ class FileProcessor:
         return records
 
     def _process_remaining_chunk(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process a chunk of remaining files."""
+        """Create simple records for ungrouped .dat, .edf, .txt files."""
         records: List[FileRecord] = []
         for extracted_path, original_path in files:
             ext = os.path.splitext(extracted_path)[1].lower()
@@ -1465,7 +1426,7 @@ class FileProcessor:
         return records
 
     def _create_synchrotron_record(self, base_id: str, file_group: Dict[str, str]) -> Optional[FileRecord]:
-        """Create record for synchrotron file group."""
+        """Build a FileRecord for a synchrotron group, enriched with .nxs metadata."""
         nxs_path = file_group.get('nxs')
         if not nxs_path:
             return None
@@ -1493,11 +1454,10 @@ class FileProcessor:
         )
 
 
-# ============================================================================
-# Scan Processor
-# ============================================================================
+# --- Scan Processor ---
+
 class ScanProcessor:
-    """Processes and correlates scan data including neutron data."""
+    """Builds the ordered scan list and correlates scans with echem data."""
 
     def __init__(self, time_method: TimeMethod = TimeMethod.ABSOLUTE,
                  data_source: DataSourceType = DataSourceType.INHOUSE):
@@ -1510,7 +1470,7 @@ class ScanProcessor:
         self.neutron_parser = NeutronMetadataParser()
 
     def process_scans(self, df: pd.DataFrame) -> Tuple[List[Scan], pd.DataFrame]:
-        """Process scans and correlate with echem data."""
+        """Main pipeline: parse echem → build scans → adjust timestamps → correlate."""
         combined_echem_df = self._process_echem_data(df)
 
         neutron_metadata_df = None
@@ -1520,28 +1480,25 @@ class ScanProcessor:
             if neutron_metadata_df is not None:
                 logger.info(f"Found {len(neutron_metadata_df)} neutron scans")
 
-        # Create scans first
         scan_list = self._create_scan_list(df, neutron_metadata_df)
 
-        # Compute exposure + midpoint-adjusted correlation times
+        # Compute midpoint-adjusted correlation timestamps
         self._adjust_for_exposure_time(scan_list)
 
-        # Set reference times for relative mode
         if self.time_method == TimeMethod.RELATIVE:
             self._set_reference_times(df, combined_echem_df, neutron_metadata_df, scan_list)
 
-        # Correlate using absolute timestamps (before formatting)
+        # Correlate scans with echem using absolute timestamps (before formatting)
         if not combined_echem_df.empty:
             self._correlate_with_echem(scan_list, combined_echem_df)
 
-        # Convert display timestamps to relative strings
+        # Convert display timestamps to relative HH:MM:SS strings
         if self.time_method == TimeMethod.RELATIVE:
             self._apply_relative_time(scan_list, combined_echem_df)
 
         return scan_list, combined_echem_df
 
     def _process_neutron_metadata(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """Process neutron metadata files."""
         neutron_meta_paths = df[df["neutron_meta"].notna()]["neutron_meta"].tolist()
 
         logger.info(f"Found {len(neutron_meta_paths)} neutron metadata files")
@@ -1568,7 +1525,7 @@ class ScanProcessor:
         return None
 
     def _process_echem_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Process all echem files and combine data."""
+        """Parse all echem files, concatenate, and sort by timestamp."""
         echem_paths = df[df["echem"].notna()]["echem"].tolist()
         echem_dfs = []
 
@@ -1593,9 +1550,9 @@ class ScanProcessor:
     def _set_reference_times(self, df: pd.DataFrame, echem_df: pd.DataFrame,
                              neutron_df: Optional[pd.DataFrame] = None,
                              scan_list: Optional[List[Scan]] = None) -> None:
-        """Set reference times for relative time mode. """
+        """Set t=0 reference for each data stream in relative time mode."""
 
-        # XRD / synchrotron reference: FIRST scan midpoint sets 0
+        # XRD/synchrotron reference: earliest scan midpoint
         if self.data_source != DataSourceType.NEUTRON and scan_list:
             mids = [
                 scan.timestamp_for_correlation
@@ -1604,7 +1561,6 @@ class ScanProcessor:
             ]
             self.xrd_reference_time = min(mids) if mids else None
         else:
-            # Fallback to old behavior if needed
             xrd_timestamps = []
             for _, row in df.iterrows():
                 if pd.notna(row.get("timestamp")) and (pd.notna(row.get("oned")) or pd.notna(row.get("twod"))):
@@ -1614,14 +1570,14 @@ class ScanProcessor:
                         pass
             self.xrd_reference_time = min(xrd_timestamps) if xrd_timestamps else None
 
-        # Echem reference: earliest echem point sets 0
+        # Echem reference: earliest echem point
         if not echem_df.empty:
             try:
                 self.echem_reference_time = pd.to_datetime(echem_df["timestamp"]).min()
             except (ValueError, TypeError):
                 self.echem_reference_time = None
 
-        # Neutron reference: also pivot to first neutron midpoint if available
+        # Neutron reference: earliest neutron midpoint
         if self.data_source == DataSourceType.NEUTRON and scan_list:
             mids = [
                 scan.timestamp_for_correlation
@@ -1630,7 +1586,6 @@ class ScanProcessor:
             ]
             self.neutron_reference_time = min(mids) if mids else None
         elif neutron_df is not None and not neutron_df.empty:
-            # Fallback old behavior
             neutron_timestamps = []
             for _, row in neutron_df.iterrows():
                 if pd.notna(row.get("start_time")):
@@ -1643,7 +1598,7 @@ class ScanProcessor:
     @staticmethod
     def _create_neutron_scan_list(df: pd.DataFrame,
                                   neutron_metadata_df: pd.DataFrame) -> List[Scan]:
-        """Create scan list for neutron data."""
+        """Match neutron .dat file groups to logbook entries, skip unmatched scans."""
         scan_list: List[Scan] = []
 
         neutron_files = []
@@ -1710,7 +1665,7 @@ class ScanProcessor:
 
     def _create_scan_list(self, df: pd.DataFrame,
                           neutron_metadata_df: Optional[pd.DataFrame] = None) -> List[Scan]:
-        """Create list of scans from DataFrame."""
+        """Build scan list from classified DataFrame, sorted by timestamp."""
         scan_list: List[Scan] = []
 
         if self.data_source == DataSourceType.NEUTRON and neutron_metadata_df is not None:
@@ -1731,7 +1686,7 @@ class ScanProcessor:
                 )
                 scan_list.append(scan)
         else:
-            # In-house data processing
+            # In-house: pair 1D and 2D by matching timestamps
             oned_df = df[df["oned"].notna()]
             twod_df = df[df["twod"].notna()]
 
@@ -1767,25 +1722,24 @@ class ScanProcessor:
                     )
                     scan_list.append(scan)
 
-        # Sort scans by timestamp
-        # Use a safe sentinel instead of pd.Timestamp.min to avoid
-        # datetime resolution mismatches in pandas >= 3.0
+        # Sort by timestamp; safe sentinel avoids pandas datetime resolution mismatches
         _sort_sentinel = pd.Timestamp("1900-01-01")
         scan_list.sort(key=lambda s: pd.to_datetime(s.timestamp) if s.timestamp else _sort_sentinel)
 
-        # Assign scan numbers
+        # Assign sequential scan numbers
         for i, scan in enumerate(scan_list, start=1):
             scan.scan_num = i
 
         return scan_list
 
     def _adjust_for_exposure_time(self, scan_list: List[Scan]) -> None:
-        """Adjust timestamps for midpoint based on exposure time."""
+        """Set timestamp_for_correlation to the exposure midpoint for each scan."""
         for scan in scan_list:
             exposure_time = self._determine_exposure_time(scan)
             scan.exposure_time = exposure_time
 
             if self.data_source == DataSourceType.NEUTRON:
+                # Neutron midpoint already computed from start/end
                 scan.timestamp_for_correlation = pd.to_datetime(scan.timestamp) if scan.timestamp else None
             else:
                 if exposure_time and scan.timestamp:
@@ -1796,7 +1750,7 @@ class ScanProcessor:
                     scan.timestamp_for_correlation = pd.to_datetime(scan.timestamp) if scan.timestamp else None
 
     def _determine_exposure_time(self, scan: Scan) -> Optional[float]:
-        """Determine exposure time for a scan."""
+        """Return best available exposure time; average 1D/2D if both present."""
         if self.data_source == DataSourceType.NEUTRON and scan.neutron_start and scan.neutron_end:
             start = pd.to_datetime(scan.neutron_start)
             end = pd.to_datetime(scan.neutron_end)
@@ -1812,14 +1766,13 @@ class ScanProcessor:
         return None
 
     def _correlate_with_echem(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate scans with echem data."""
         if self.time_method == TimeMethod.RELATIVE:
             self._correlate_relative_time(scan_list, echem_df)
         else:
             self._correlate_absolute_time(scan_list, echem_df)
 
     def _correlate_relative_time(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate using relative time."""
+        """Match scans to nearest echem point by relative offset from respective t=0."""
         reference_time = None
         if self.data_source == DataSourceType.NEUTRON:
             reference_time = self.neutron_reference_time
@@ -1859,7 +1812,7 @@ class ScanProcessor:
 
     @staticmethod
     def _correlate_absolute_time(scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate using absolute time."""
+        """Match scans to nearest echem point by absolute timestamp proximity."""
         echem_timestamps = None
         try:
             echem_timestamps = pd.to_datetime(echem_df["timestamp"])
@@ -1887,6 +1840,7 @@ class ScanProcessor:
             if isinstance(scan_time, str):
                 scan_time = pd.to_datetime(scan_time)
 
+            # Skip scans outside echem window + tolerance
             if (scan_time < echem_start - pd.Timedelta(seconds=config.echem_time_tolerance) or
                     scan_time > echem_end + pd.Timedelta(seconds=config.echem_time_tolerance)):
                 scan.echem = None
@@ -1909,14 +1863,13 @@ class ScanProcessor:
                 scan.echem_timestamp = None
 
     def _apply_relative_time(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Apply relative time formatting."""
+        """Replace absolute timestamps with HH:MM:SS relative strings for display."""
         reference_time = None
         if self.data_source == DataSourceType.NEUTRON:
             reference_time = self.neutron_reference_time
         else:
             reference_time = self.xrd_reference_time
 
-        # Update scan displayed timestamps (prefer midpoint-adjusted time)
         if reference_time:
             for scan in scan_list:
                 base_time = None
@@ -1934,7 +1887,6 @@ class ScanProcessor:
                     relative_seconds = (base_time - reference_time).total_seconds()
                     scan.timestamp = self._format_relative_time(relative_seconds)
 
-        # Update global echem timestamps for relative display
         if not echem_df.empty and self.echem_reference_time:
             original_timestamps = pd.to_datetime(echem_df["timestamp"])
             relative_seconds = (original_timestamps - self.echem_reference_time).dt.total_seconds()
@@ -1944,18 +1896,16 @@ class ScanProcessor:
 
     @staticmethod
     def _format_relative_time(seconds: float) -> str:
-        """Format seconds as HH:MM:SS."""
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-# ============================================================================
-# NeXus File Writer
-# ============================================================================
+# --- NeXus File Writer ---
+
 class NXSWriter:
-    """Writes NeXus files with enhanced metadata support."""
+    """Writes the final NeXus/HDF5 file with scan data, echem, and metadata."""
 
     def __init__(self, data_source: DataSourceType = DataSourceType.INHOUSE):
         self.data_source = data_source
@@ -1963,23 +1913,21 @@ class NXSWriter:
 
     def write(self, output_path: str, scans: List[Scan], echem_df: pd.DataFrame,
               standard_echem_files: Optional[List[str]] = None) -> None:
-        """Write processed data to NeXus file."""
         reader_factory = DataReaderFactory()
 
         with h5py.File(output_path, 'w') as f:
-            # Set root attributes
+            # Root attributes
             f.attrs['NX_class'] = 'NXroot'
             f.attrs['file_name'] = os.path.basename(output_path)
             f.attrs['file_time'] = pd.Timestamp.now().isoformat()
 
-            # Process each scan
+            # --- Per-scan entries ---
             for scan in scans:
-                # Create entry for each scan
                 scan_entry = f.create_group(f'scan_{scan.scan_num:04d}')
                 scan_entry.attrs['NX_class'] = 'NXentry'
                 scan_entry.attrs['scan_number'] = scan.scan_num
 
-                # Metadata group
+                # Scan metadata
                 metadata = scan_entry.create_group('metadata')
                 metadata.attrs['NX_class'] = 'NXcollection'
 
@@ -2002,12 +1950,11 @@ class NXSWriter:
                 if scan.exposure_time is not None:
                     metadata.create_dataset('exposure_time', data=scan.exposure_time)
 
-                # XRD data group
+                # XRD data (1D and/or 2D)
                 if scan.oned or scan.twod:
                     xrd_group = scan_entry.create_group('xrd_data')
                     xrd_group.attrs['NX_class'] = 'NXdata'
 
-                    # 1D data
                     if scan.oned:
                         try:
                             data_1d = reader_factory.read_file(scan.oned)
@@ -2018,11 +1965,10 @@ class NXSWriter:
                             logger.error(f"Error reading 1D data for scan {scan.scan_num}: {e}")
                             xrd_group.attrs['oned_source_file'] = os.path.basename(scan.oned)
 
-                    # 2D data
                     if scan.twod:
                         self._write_2d_data(xrd_group, scan, reader_factory)
 
-                # Neutron data
+                # Neutron data (TOF and d-spacing per bank)
                 if scan.neutron_files:
                     neutron_group = scan_entry.create_group('neutron_data')
                     neutron_group.attrs['NX_class'] = 'NXdata'
@@ -2032,12 +1978,10 @@ class NXSWriter:
                     if scan.neutron_end:
                         neutron_group.attrs['end_time'] = scan.neutron_end
 
-                    # Process each measurement
                     for meas_num, meas_files in scan.neutron_files.items():
                         bank_group = neutron_group.create_group(f'bank_{meas_num}')
                         bank_group.attrs['measurement_number'] = meas_num
 
-                        # TOF data
                         if 'tof' in meas_files:
                             try:
                                 tof_data = reader_factory.read_file(meas_files['tof'], is_neutron=True)
@@ -2048,7 +1992,6 @@ class NXSWriter:
                                 logger.error(f"Error reading TOF data: {e}")
                                 bank_group.attrs['tof_source_file'] = os.path.basename(meas_files['tof'])
 
-                        # d-spacing data
                         if 'd' in meas_files:
                             try:
                                 d_data = reader_factory.read_file(meas_files['d'], is_neutron=True)
@@ -2059,7 +2002,7 @@ class NXSWriter:
                                 logger.error(f"Error reading d-spacing data: {e}")
                                 bank_group.attrs['d_source_file'] = os.path.basename(meas_files['d'])
 
-            # Global metadata
+            # --- Global metadata ---
             global_meta = f.create_group('global_metadata')
             global_meta.attrs['NX_class'] = 'NXcollection'
             global_meta.attrs['total_scans'] = len(scans)
@@ -2076,11 +2019,10 @@ class NXSWriter:
             else:
                 global_meta.attrs['twod_included'] = False
 
-            # Extract metadata from first scan's source file
+            # Extract instrument metadata from first scan's source file
             if scans:
                 first_scan = scans[0]
 
-                # Inhouse EDF metadata
                 twod_path = first_scan.twod
                 if twod_path and str(twod_path).lower().endswith('.edf'):
                     edf_meta = extract_edf_global_metadata(twod_path)
@@ -2095,7 +2037,6 @@ class NXSWriter:
                                 except Exception as e:
                                     logger.debug(f"Could not write EDF field '{key}': {e}")
 
-                # Synchrotron NeXus metadata
                 if self.data_source == DataSourceType.SYNCHROTRON:
                     nxs_path = first_scan.source_nxs
                     if nxs_path and os.path.isfile(nxs_path):
@@ -2111,14 +2052,12 @@ class NXSWriter:
                                     except Exception as e:
                                         logger.debug(f"Could not write NeXus field '{key}': {e}")
 
-            # Store operando echem data
+            # --- Operando electrochemistry (time-correlated) ---
             if not echem_df.empty:
                 echem_group = f.create_group('operando_electrochemistry')
                 echem_group.attrs['NX_class'] = 'NXdata'
 
-                # Convert timestamps to strings — use .to_numpy(dtype=object)
-                # to ensure plain NumPy arrays for h5py (pandas >= 3.0 str
-                # dtype .values may return PyArrow-backed arrays).
+                # Use .to_numpy(dtype=object) to avoid PyArrow-backed arrays in pandas >= 3.0
                 timestamps = echem_df['timestamp'].astype(str).to_numpy(dtype=object)
                 echem_group.create_dataset('timestamps', data=timestamps)
                 echem_group.create_dataset('voltage (V)',
@@ -2128,7 +2067,7 @@ class NXSWriter:
                     current_values = echem_df['current'].to_numpy(dtype=float)
                     echem_group.create_dataset('current (mA)', data=current_values)
 
-            # Store standard echem data
+            # --- Standard electrochemistry (standalone files) ---
             if standard_echem_files:
                 std_echem_container = f.create_group('standard_electrochemistry')
                 std_echem_container.attrs['NX_class'] = 'NXcollection'
@@ -2165,6 +2104,7 @@ class NXSWriter:
     @staticmethod
     def _write_2d_data(xrd_group: h5py.Group, scan: Scan,
                        reader_factory: DataReaderFactory) -> None:
+        """Embed or reference 2D detector image depending on config."""
         if not scan.twod:
             return
 
@@ -2175,7 +2115,7 @@ class NXSWriter:
         is_hdf = (ext == ".hdf")
         is_edf = (ext == ".edf")
 
-        # Always store the link/reference
+        # Always store source reference
         xrd_group.attrs["twod_source"] = basename
         xrd_group.attrs["twod_is_hdf"] = is_hdf
         xrd_group.attrs["twod_is_edf"] = is_edf
@@ -2206,11 +2146,10 @@ class NXSWriter:
             xrd_group.attrs["twod_embedded"] = False
 
 
-# ============================================================================
-# NeXus Generator
-# ============================================================================
+# --- NeXus Generator ---
+
 class NXSGenerator:
-    """Main class for NeXus file generation."""
+    """Top-level orchestrator: collect → classify → correlate → write."""
 
     def __init__(self, data_source: DataSourceType = DataSourceType.INHOUSE):
         self.data_source = data_source
@@ -2221,7 +2160,6 @@ class NXSGenerator:
                      time_method: TimeMethod = TimeMethod.ABSOLUTE,
                      progress_callback: Optional[Callable[[str], None]] = None,
                      standard_echem_files: Optional[List[str]] = None) -> Tuple[bool, List[str]]:
-        """NeXus file generation."""
         try:
             with FileProcessor(progress_callback, self.data_source) as processor:
                 records = processor.process_paths(input_paths)
@@ -2248,7 +2186,6 @@ class NXSGenerator:
             scan_processor = ScanProcessor(time_method, self.data_source)
             scans, echem_df = scan_processor.process_scans(sorted_df)
 
-            # Validation
             validation_errors = self._validate_for_nxs(scans, echem_df)
 
             if any("No scan data" in e or "No XRD" in e for e in validation_errors):
@@ -2267,7 +2204,7 @@ class NXSGenerator:
 
     @staticmethod
     def _validate_for_nxs(scans: List[Scan], echem_df: pd.DataFrame) -> List[str]:
-        """Returns list of validation errors, empty if valid."""
+        """Return validation errors; empty list means valid."""
         errors: List[str] = []
 
         if not scans:
@@ -2285,11 +2222,10 @@ class NXSGenerator:
         return errors
 
 
-# ============================================================================
-# GUI Application
-# ============================================================================
+# --- GUI ---
+
 class NXSGeneratorGUI:
-    """Tkinter GUI for NeXus file generation."""
+    """Tkinter interface for selecting inputs, options, and triggering generation."""
 
     def __init__(self, root: tk.Tk):
         self.display_size_combo = None
@@ -2301,7 +2237,6 @@ class NXSGeneratorGUI:
         self.root.title("NeXus File Generator")
         self.root.geometry("600x620")
 
-        # Variables
         self.input_path = tk.StringVar()
         self.output_path = tk.StringVar()
         self.standard_echem_files: List[str] = []
@@ -2316,23 +2251,19 @@ class NXSGeneratorGUI:
         self.setup_ui()
 
     def setup_ui(self) -> None:
-        """Create the GUI layout."""
 
-        # Main container
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
 
-        # Title
         title = ttk.Label(main_frame, text="NeXus File Generator",
                           font=('Helvetica', 16, 'bold'))
         title.grid(row=0, column=0, columnspan=3, pady=(0, 10))
 
-        # Input selection
+        # Input path
         ttk.Label(main_frame, text="Input Path:", font=('Helvetica', 10, 'bold')).grid(
             row=1, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -2349,7 +2280,7 @@ class NXSGeneratorGUI:
         ttk.Button(input_frame, text="Select Directory",
                    command=self.select_directory).grid(row=0, column=2)
 
-        # Output selection
+        # Output path
         ttk.Label(main_frame, text="Output NeXus File:", font=('Helvetica', 10, 'bold')).grid(
             row=3, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -2363,7 +2294,7 @@ class NXSGeneratorGUI:
         ttk.Button(output_frame, text="Save As...",
                    command=self.select_output).grid(row=0, column=1)
 
-        # Data source selection
+        # Data source
         ttk.Label(main_frame, text="Data Source Type:", font=('Helvetica', 10, 'bold')).grid(
             row=5, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -2380,7 +2311,7 @@ class NXSGeneratorGUI:
                         variable=self.data_source, value="neutron",
                         command=self._on_source_change).grid(row=0, column=2, padx=5)
 
-        # Time method selection
+        # Time method
         ttk.Label(main_frame, text="Time Sorting Method:", font=('Helvetica', 10, 'bold')).grid(
             row=7, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -2416,15 +2347,14 @@ class NXSGeneratorGUI:
             values=["No downsampling", "4096", "2048", "1024", "512"],
             state="readonly"
         )
-        self.display_size_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+        self.display_size_combo.grid(row=0, column=1, sticky=tk.W, padx=(7.5, 2.5))
 
         ttk.Label(options_frame, text="Set max 2D data shape (n x n)").grid(
             row=0, column=2, sticky=tk.W)
 
-        # Initially disable synchrotron options
         self._update_2d_options()
 
-        # Standard Electrochemistry (optional)
+        # Standard echem (optional)
         ttk.Separator(main_frame, orient='horizontal').grid(
             row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
 
@@ -2444,7 +2374,7 @@ class NXSGeneratorGUI:
         ttk.Button(std_echem_frame, text="Clear",
                    command=self.clear_standard_echem).grid(row=0, column=2)
 
-        # Progress display
+        # Progress
         ttk.Separator(main_frame, orient='horizontal').grid(
             row=15, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
 
@@ -2472,6 +2402,7 @@ class NXSGeneratorGUI:
         self._update_2d_options()
 
     def _update_2d_options(self) -> None:
+        """Enable/disable 2D controls based on data source and checkbox state."""
         if self.include_2d_check is None:
             return
         has_2d = self.data_source.get() in ("synchrotron", "inhouse")
@@ -2485,7 +2416,6 @@ class NXSGeneratorGUI:
             self.display_size_combo.config(state='readonly' if combo_active else 'disabled')
 
     def select_file(self) -> None:
-        """Open dialog for single file selection."""
         filename = filedialog.askopenfilename(
             title="Select Input File",
             filetypes=[
@@ -2504,24 +2434,18 @@ class NXSGeneratorGUI:
         )
         if filename:
             self.input_path.set(filename)
-
-            # Auto-generate output path
             base = os.path.splitext(filename)[0]
             self.output_path.set(f"{base}_output.nxs")
 
     def select_directory(self) -> None:
-        """Open dialog for directory selection."""
         directory = filedialog.askdirectory(title="Select Input Directory")
         if directory:
             self.input_path.set(directory)
-
-            # Auto-generate output path
             dir_name = os.path.basename(directory)
             parent_dir = os.path.dirname(directory)
             self.output_path.set(os.path.join(parent_dir, f"{dir_name}_output.nxs"))
 
     def select_output(self) -> None:
-        """Open dialog for output file selection."""
         filename = filedialog.asksaveasfilename(
             title="Save NeXus File As",
             defaultextension=".nxs",
@@ -2550,10 +2474,8 @@ class NXSGeneratorGUI:
         self.clear_standard_echem()
 
         for filepath in filenames:
-            # Keep original for display
             self.standard_echem_original_files.append(filepath)
 
-            # Keep processed/converted for writing/parsing
             lower_path = filepath.lower()
             if lower_path.endswith('.xlsx'):
                 converted_path = convert_xlsx_to_txt(filepath)
@@ -2567,19 +2489,15 @@ class NXSGeneratorGUI:
         self.standard_echem_display.set(" | ".join(self.standard_echem_original_files))
 
     def clear_standard_echem(self) -> None:
-        """Clear selected standard electrochemistry files."""
         self.standard_echem_files = []
         self.standard_echem_original_files = []
         self.standard_echem_display.set("")
 
     def update_progress(self, message: str) -> None:
-        """Update progress display."""
         self.root.after(0, lambda: self.progress_text.set(message))
 
     def generate_nxs(self) -> None:
-        """Generate NeXus file."""
-
-        # Validate inputs
+        """Validate inputs and launch generation in a background thread."""
         if not self.input_path.get():
             messagebox.showerror("Error", "Please select an input file or directory")
             return
@@ -2588,27 +2506,22 @@ class NXSGeneratorGUI:
             messagebox.showerror("Error", "Please specify an output file")
             return
 
-        # Disable button during processing
         if self.generate_btn:
             self.generate_btn.config(state='disabled')
         if self.progress_bar:
             self.progress_bar.start()
 
-        # Run in separate thread
         thread = threading.Thread(target=self._generate_worker)
         thread.start()
 
     def _generate_worker(self) -> None:
-        """Worker thread for NeXus generation."""
+        """Background thread: run full generation pipeline and report results."""
         try:
-            # Convert parameters
             source_type = DataSourceType(self.data_source.get())
             time_method = TimeMethod(self.time_method.get())
 
-            # Update config with GUI options
             config.include_2d_images = self.include_2d_images.get()
 
-            # Get standard echem files if any
             std_echem_files = self.standard_echem_files if self.standard_echem_files else None
 
             size_val = self.max_display_size.get()
@@ -2617,10 +2530,8 @@ class NXSGeneratorGUI:
             else:
                 config.synchrotron_max_display_size = int(size_val)
 
-            # Create generator
             generator = NXSGenerator(source_type)
 
-            # Generate NeXus file
             success, messages = generator.generate_nxs(
                 input_paths=[self.input_path.get()],
                 output_path=self.output_path.get(),
@@ -2629,7 +2540,6 @@ class NXSGeneratorGUI:
                 standard_echem_files=std_echem_files
             )
 
-            # Show results
             if success:
                 self.root.after(0, lambda: messagebox.showinfo(
                     "Success",
@@ -2648,17 +2558,14 @@ class NXSGeneratorGUI:
             ))
 
         finally:
-            # Re-enable button and stop progress bar
             self.root.after(0, lambda: self.generate_btn.config(state='normal') if self.generate_btn else None)
             self.root.after(0, lambda: self.progress_bar.stop() if self.progress_bar else None)
             self.root.after(0, lambda: self.progress_text.set("Ready"))
 
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
+# --- Entry Point ---
+
 def main() -> None:
-    """Main entry point."""
     root = tk.Tk()
     NXSGeneratorGUI(root)
     root.mainloop()
