@@ -7,27 +7,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "OperaXN"
+version = "1.0.0"
 description = "Visualise operando diffraction experiments and produce standardised nexus files"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 
-requires-python = ">3.8"
+requires-python = ">=3.9"
 authors = [
-  { name="Matthew A. Powell", email="Matt.Powell@warwick.ac.uk" },
-  { name = "Gabriel E. Perez", email = "gabriel.perez@stfc.ac.uk"},
-  { name = "Tobias A. Bird", email = "tobias.bird@diamond.ac.uk"},
-  { name = "Gaurav C. Pandey", email="Gaurav.Pandey@warwick.ac.uk"},
-  { name = "Steven Huband", email = "S.Huband@warwick.ac.uk"},
-  { name = "Sarah J. Day", email = "sarah.day@diamond.ac.uk"},
-  { name = "Louis F. J. Piper", email = "Louis.Piper@warwick.ac.uk"},
-  { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk"}
+    { name = "Matthew A. Powell", email = "Matt.Powell@warwick.ac.uk" },
+    { name = "Gabriel E. Perez", email = "gabriel.perez@stfc.ac.uk" },
+    { name = "Tobias A. Bird", email = "tobias.bird@diamond.ac.uk" },
+    { name = "Gaurav C. Pandey", email = "Gaurav.Pandey@warwick.ac.uk" },
+    { name = "Steven Huband", email = "S.Huband@warwick.ac.uk" },
+    { name = "Sarah J. Day", email = "sarah.day@diamond.ac.uk" },
+    { name = "Louis F. J. Piper", email = "Louis.Piper@warwick.ac.uk" },
+    { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk" },
 ]
 
 maintainers = [
-    { name="Matthew A. Powell", email="Matt.Powell@warwick.ac.uk" },
-    { name = "Tobias A. Bird", email = "tobias.bird@diamond.ac.uk"},
-    { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk"}
+    { name = "Matthew A. Powell", email = "Matt.Powell@warwick.ac.uk" },
+    { name = "Tobias A. Bird", email = "tobias.bird@diamond.ac.uk" },
+    { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk" },
 ]
 
 keywords = [
@@ -35,8 +36,9 @@ keywords = [
     "diffraction",
     "nexus",
     "OperaXN",
-    "electrochemistry"
+    "electrochemistry",
 ]
+
 classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -52,16 +54,20 @@ dependencies = [
     "matplotlib",
     "openpyxl",
     "psutil",
-    "imageio"
-    ]
-
-dynamic = ["version"]
+    "imageio",
+]
 
 [project.urls]
 Homepage = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator"
 Issues = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator/issues"
 
 [project.scripts]
+operaxn = "operaxn.app:main"
+nexusgen = "NexusGenerator.main:main"
 
-operaxn-gui = OPERAXN-and-NeXus-Generator.OPERAXN:main
-nexusgen = OPERAXN-and-NeXus-Generator.NexusGenerator:main
+[tool.hatch.build.targets.wheel]
+packages = ["bin/OPERAXN/operaxn", "bin/NexusGenerator"]
+
+[tool.hatch.build.targets.wheel.sources]
+"bin/OPERAXN" = ""
+"bin/NexusGenerator" = "NexusGenerator"
