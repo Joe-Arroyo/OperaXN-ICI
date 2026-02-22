@@ -62,11 +62,11 @@ Homepage = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator"
 Issues = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator/issues"
 
 [project.scripts]
-operaxn = "operaxn.app:main"
+operaxn = "OPERAXN.main:main"
 nexusgen = "NexusGenerator.main:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bin/OPERAXN/operaxn", "bin/NexusGenerator"]
+packages = ["bin/OPERAXN", "bin/NexusGenerator"]
 
 [tool.hatch.build.targets.wheel.sources]
 "bin/OPERAXN" = ""
