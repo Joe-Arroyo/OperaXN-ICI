@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.log
+.DS_Store
+Thumbs.db
+.pytest_cache/
+.ruff_cache/
+*.nxs
+*.hdf
+*.hdf5
+*.edf
