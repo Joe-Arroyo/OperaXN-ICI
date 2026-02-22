@@ -1,3 +1,3 @@
 # OperaXN
-Nexusgen in working state
-Operaxn not yet fully functional
+NexusGenerator in working state
+OPERAXN not yet fully functional
