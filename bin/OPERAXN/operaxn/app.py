@@ -17,7 +17,7 @@ if __name__ == "__main__" and __package__ is None:
     parent_dir = file_path.parent
     sys.path.insert(0, str(parent_dir))
 
-from OPERAXN.config import (
+from .config import (
     DEBUG_MODE,
     APP_NAME,
     APP_VERSION as __version__,
@@ -26,7 +26,7 @@ from OPERAXN.config import (
     LOG_FORMAT,
     LOG_FILE
 )
-from OPERAXN.gui import OPERAXN
+from .gui import OPERAXN
 
 # ============================================================================
 # Constants
@@ -742,8 +742,8 @@ class ApplicationManager:
         try:
             if self.app:
                 # Clear caches
-                from OPERAXN.output import clear_plot_cache
-                from OPERAXN.input import clear_global_cache
+                from .output import clear_plot_cache
+                from .input import clear_global_cache
                 clear_plot_cache()
                 clear_global_cache()
         except:
@@ -885,3 +885,4 @@ def main(args: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
