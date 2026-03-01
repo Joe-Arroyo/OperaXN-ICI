@@ -31,15 +31,14 @@ maintainers = [
     { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk" },
 ]
 
-keywords = [
-    "operando",
-    "diffraction",
-    "nexus",
-    "OperaXN",
-    "electrochemistry",
-]
-
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -47,27 +46,26 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy",
-    "pandas",
-    "h5py",
-    "fabio",
-    "matplotlib",
-    "openpyxl",
-    "psutil",
-    "imageio",
+    "numpy>=1.20.0",
+    "pandas>=2.0.0",
+    "h5py>=3.0.0",
+    "fabio>=0.14.0",
+    "matplotlib>=3.4.0",
+    "openpyxl>=3.0.0",
+    "psutil>=5.8.0",
+    "imageio>=2.9.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator"
-Issues = "https://github.com/matthewarlopowell/OPERAXN-and-NeXus-Generator/issues"
+Repository = "https://github.com/matthewarlopowell/OperaXN"
 
 [project.scripts]
-operaxn = "OPERAXN.main:main"
-nexusgen = "NexusGenerator.main:main"
+operaxn = "operaxn.main:main"
+nexusgen = "nexusgen.main:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bin/OPERAXN", "bin/NexusGenerator"]
+packages = ["bin/operaxn", "bin/nexusgen"]
 
 [tool.hatch.build.targets.wheel.sources]
-"bin/OPERAXN" = ""
-"bin/NexusGenerator" = "NexusGenerator"
+"bin/operaxn" = "operaxn"
+"bin/nexusgen" = "nexusgen"
