@@ -61,6 +61,32 @@ operaxn --check-deps    # Verify dependencies
 operaxn --info          # Show configuration
 ```
 
+## Preffered data formats
+
+### In-House
+
+```bash
+nexusgen
+```
+
+### Synchrotron
+
+```bash
+...
+```
+
+### Neutron
+
+```bash
+...
+```
+
+### Echem
+
+```bash
+...
+```
+
 ## Dependencies
 
 - Python >= 3.9
