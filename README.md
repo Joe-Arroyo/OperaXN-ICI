@@ -115,14 +115,3 @@ OperaXN/
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
-## Authors
-
-- Matthew A. Powell (University of Warwick)
-- Gabriel E. Perez (STFC)
-- Tobias A. Bird (Diamond Light Source)
-- Gaurav C. Pandey (University of Warwick)
-- Steven Huband (University of Warwick)
-- Sarah J. Day (Diamond Light Source)
-- Louis F. J. Piper (University of Warwick)
-- Ashok S. Menon (University of Warwick)
