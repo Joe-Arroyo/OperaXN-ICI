@@ -11,7 +11,7 @@ OperaXN is a Python desktop application for visualising and analysing operando d
 - Plot neutron diffraction data
 - Overlay electrochemistry data with time-correlated diffraction scans
 - Interactive GUI with scan navigation, cropping, and intensity controls
-- Export publication-quality figures (PNG, PDF, SVG, TIFF)
+- Export publication-quality figures (PNG, PDF, SVG)
 - Generate animated GIFs of diffraction sequences
 - Supports `.dat`, `.xy`, `.edf`, `.hdf`, `.nxs`, `.txt`, and `.zip` archives
 
