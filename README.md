@@ -8,7 +8,7 @@ OperaXN is a Python desktop application for visualising and analysing operando d
 
 ### operaxn
 - Visualise 1D and 2D X-ray diffraction patterns
-- Plot neutron diffraction data (Polaris, HRPD, GEM, etc.)
+- Plot neutron diffraction data
 - Overlay electrochemistry data with time-correlated diffraction scans
 - Interactive GUI with scan navigation, cropping, and intensity controls
 - Export publication-quality figures (PNG, PDF, SVG, TIFF)
@@ -16,10 +16,10 @@ OperaXN is a Python desktop application for visualising and analysing operando d
 - Supports `.dat`, `.xy`, `.edf`, `.hdf`, `.nxs`, `.txt`, and `.zip` archives
 
 ### nexusgen
-- Build NeXus HDF5 files from raw diffraction and electrochemistry data
+- Build Nexus HDF5 files from raw diffraction and electrochemistry data
 - Supports synchrotron, in-house, and neutron source types
 - Embeds metadata, scan parameters, and instrument configuration
-- Produces files compliant with the NeXus standard for long-term data archival
+- Produces files compliant with the Nexus standard for long-term data archival
 
 ## Installation
 
@@ -79,7 +79,7 @@ operaxn --info          # Show configuration
 OperaXN/
   bin/
     operaxn/       # Main visualisation application
-    nexusgen/      # NeXus file generator
+    nexusgen/      # Nexus file generator
   tests/
     operaxn/
     nexusgen/
