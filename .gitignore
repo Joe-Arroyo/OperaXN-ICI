@@ -1,51 +1,35 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.pyo
 
-# Distribution / Packaging
-dist/
-build/
-*.egg-info/
-*.egg
-*.whl
-sdist/
-
-# Virtual Environments
+# Virtual environments
 .venv/
 venv/
-ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
 
 # IDE
 .idea/
 
-# Testing / Linting
+# Testing / cache
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .coverage
 htmlcov/
 
-# OS Files
+# OS files
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Logs / Temp
-*.log
-*.tmp
-
-# Environment / Secrets
+# Environment files
 .env
 .env.*
 
-# Scientific Data Files
+# Scientific data
 *.nxs
 *.hdf
-*.hdf5
-*.h5
 *.edf
-
-# Exported Figures / GIFs
-*.gif
