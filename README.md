@@ -18,7 +18,7 @@ OperaXN is a Python desktop application for visualising and analysing operando d
 - Build Nexus files from raw diffraction and electrochemistry data
 - Supports synchrotron, in-house, and neutron source types
 - Embeds instrument metadata and time-correlated scan data
-- Produces files compliant with the Nexus standard for seemless data sharing
+- Produces files compliant with the Nexus standard for seamless data sharing
   
 ## Installation
 
@@ -60,7 +60,7 @@ operaxn --check-deps    # Verify dependencies
 operaxn --info          # Show configuration
 ```
 
-## Preffered data formats
+## Preferred data formats
 
 ### In-House
 
