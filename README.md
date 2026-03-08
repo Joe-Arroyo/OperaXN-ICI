@@ -2,21 +2,21 @@
 
 **OPERAndo X-ray and Neutron diffraction data visualisation tool**
 
-OperaXN is a Python desktop application for visualising and analysing operando diffraction data from synchrotron, in-house, and neutron sources. It also includes **nexusgen**, a companion tool for generating standardised NeXus (`.nxs`) files from raw experimental data.
+OperaXN is a Python-based desktop application for visualising, analysing and sharing diffraction data collected from electrochemical battery cells using laboratory, synchrotron, or neutron sources *in situ* or *in operando*. It also includes **nexusgen**, a companion tool for generating standardised NeXus (`.nxs`) files from raw electrochemical and diffraction data to facilitate easy data sharing in machine-readable formats.
 
 ## Features
 
 ### OperaXN
-- Visualise 1D and 2D X-ray and neutron diffraction patterns
-- Overlay electrochemistry data with time-correlated diffraction scans
-- Interactive GUI with scan navigation, cropping, and intensity controls
+- Automated time-correlation of electrochemical (voltage and current) and diffraction datasets
+- Simultaneous visualisation of X-ray (1D and 2D) and neutron (constant wavelength and time-of-flight) diffraction data
+- Interactive GUI with scan navigation and visualisation controls
 - Export publication-quality figures (PNG, PDF, SVG)
-- Generate animated GIFs of diffraction sequences
-- Supports `.dat`, `.xy`, `.edf`, `.hdf`, `.nxs`, `.txt`, and `.zip` files
+- Generate animated GIFs of electrochemistry-diffraction data sequences
+- Currently supports `.dat`, `.xy`, `.edf`, `.hdf`, `.nxs`, `.txt`, and `.zip` files
 
 ### Nexus Generator
 - Build Nexus files from raw diffraction and electrochemistry data
-- Supports synchrotron, in-house, and neutron source types
+- Supports synchrotron, in-house, and neutron data types
 - Embeds instrument metadata and time-correlated scan data
 - Produces files compliant with the Nexus standard for seamless data sharing
   
@@ -115,3 +115,6 @@ OperaXN/
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+## AI Usage
+This project was developed with the assistance of Claude (Anthropic).
