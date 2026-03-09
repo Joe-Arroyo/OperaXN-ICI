@@ -2,16 +2,16 @@
 
 **OPERAndo X-ray and Neutron diffraction data visualisation tool**
 
-OperaXN is a Python-based desktop application for visualising, analysing and sharing diffraction data collected from electrochemical battery cells using laboratory, synchrotron, or neutron sources *in situ* or *in operando*. It also includes **nexusgen**, a companion tool for generating standardised NeXus (`.nxs`) files from raw electrochemical and diffraction data to facilitate easy data sharing in machine-readable formats.
+OperaXN is a Python-based desktop application for correlating, visualising and analysing *operando* diffraction data collected by laboratory XRD, synchrotron XRD or neutron diffraction sources. It also includes **nexusgen**, a companion tool for generating standardised NeXus (`.nxs`) files from raw electrochemical and diffraction data to facilitate easy data sharing in machine-readable formats.
 
 ## Features
 
 ### OperaXN
 - Automated time-correlation of electrochemical (voltage and current) and diffraction datasets
-- Simultaneous visualisation of X-ray (1D and 2D) and neutron (constant wavelength and time-of-flight) diffraction data
+- Simultaneous visualisation of X-ray (1D and 2D) and neutron diffraction data with electrochemical cycling
 - Interactive GUI with scan navigation and visualisation controls
 - Export publication-quality figures (PNG, PDF, SVG)
-- Generate animated GIFs of electrochemistry-diffraction data sequences
+- Generate animated GIFs
 - Currently supports `.dat`, `.xy`, `.edf`, `.hdf`, `.nxs`, `.txt`, and `.zip` files
 
 ### Nexus Generator
@@ -62,7 +62,7 @@ operaxn --check-deps    # Verify dependencies
 
 ### In-House
 
-**1D data** (`.dat`) - whitespace-delimited columns with a `#` comment header containing a `Date` field (ISO 8601) for time-correlation:
+**1D data** (`.dat`) - whitespace-delimited columns with a `#` comment header containing a `Date` field for time-correlation:
 
 ```
 tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
@@ -70,7 +70,7 @@ tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
 
 **2D data** (`.edf`) - raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
 
-One file per scan, stored in a single directory. Files are sorted by name to determine scan order.
+One file per scan, stored in a single directory. Files are sorted by name to determine scan order (eg: 20231204_1_00446_azimAvg.dat, 20231204_1_00398.edf).
 
 ### Synchrotron
 
@@ -86,7 +86,7 @@ tth(°)    Intensity(a.u.)
 
 **2D data** (`.hdf`) - 2D detector images stored in HDF5 format (under `entry/data/data`).
 
-All three file types are stored in subdirectories within a single parent directory. Files are matched by scan ID extracted from filenames.
+All three file types are stored in subdirectories within a single parent directory. Files are matched by scan ID extracted from filenames (eg: i11-1-85000.nxs,  i11-1-85000_integration_tth_0000_HM28.xy, pixium_85000.hdf).
 
 ### Neutron
 
