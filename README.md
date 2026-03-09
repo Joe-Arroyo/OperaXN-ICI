@@ -58,41 +58,48 @@ operaxn --debug         # Enable debug logging
 operaxn --check-deps    # Verify dependencies
 ```
 
+## Time correlation
+
+OperaXN correlates diffraction scans with electrochemistry data by timestamp. Two modes are available (selected at load time):
+
+- **Absolute** — scan timestamps are matched directly to echem timestamps via nearest-neighbour lookup.
+- **Relative** — both datasets are zeroed to their respective first timestamps and correlated by elapsed time. Useful when diffraction and echem clocks are not synchronised.
+
 ## Preferred data formats
 
 ### In-House
 
-**1D data** (`.dat`) - whitespace-delimited columns with a `#` comment header containing a `Date` field for time-correlation:
+**1D data** (`.dat`) — whitespace-delimited columns with a `#` comment header containing a `Date` field in ISO 8601 format (e.g. `2023-04-19T10:30:00`) for time-correlation:
 
 ```
 tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
 ```
 
-**2D data** (`.edf`) - raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
+**2D data** (`.edf`) — raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
 
-One file per scan, stored in a single directory. Files are sorted by name to determine scan order (eg: 20231204_1_00500_azimAvg.dat, 20231204_1_00500.edf).
+One file per scan, stored in a single directory. 1D and 2D files are paired by matching `Date` timestamps.
 
 ### Synchrotron
 
-Synchrotron data requires three file types grouped by scan ID:
+Synchrotron data is grouped by scan ID extracted from filenames. `.nxs` metadata files are required; `.xy` and `.hdf` are optional depending on whether 1D, 2D, or both are available.
 
-**Metadata** (`.nxs`) - NeXus files containing `start_time` and `end_time` fields (under `entry1/`) used for time-correlation with electrochemistry data.
+**Metadata** (`.nxs`) — NeXus files providing `start_time` and `end_time` timestamps for time-correlation. The midpoint of each scan is used for echem matching.
 
-**1D data** (`.xy`) - headerless, whitespace-delimited two-column data:
+**1D data** (`.xy`) — headerless, whitespace-delimited two-column data:
 
 ```
 tth(°)    Intensity(a.u.)
 ```
 
-**2D data** (`.hdf`) - 2D detector images stored in HDF5 format (under `entry/data/data`).
+**2D data** (`.hdf`) — 2D detector images stored in HDF5 format.
 
-All three file types are stored in subdirectories within a single parent directory. Files are matched by scan ID extracted from filenames (eg: i11-1-85000.nxs,  i11-1-85000_integration_tth_0000_HM28.xy, pixium_85000.hdf).
+All file types are stored within a single parent directory (subdirectories are traversed). Files are matched by scan ID extracted from filenames.
 
 ### Neutron
 
-**Logbook** (`.txt`) - tab-delimited logbook file containing scan IDs (5–7 digit) with start and end timestamps for time-correlation. Timestamps are in `Day Mon DD HH:MM:SS YYYY` format.
+**Logbook** (`.txt`) — ISIS instrument logbook, tab-delimited with ≥8 columns per row. Column 0 is a 5–7 digit scan ID; two columns contain start and end timestamps in `Day Mon DD HH:MM:SS YYYY` format (e.g. `Mon Jul 15 22:43:31 2024`). The midpoint of each scan is used for echem matching.
 
-**TOF and d-spacing data** (`.dat`) - Mantid-exported files with a `#` comment header, three whitespace-delimited columns per bank:
+**TOF and d-spacing data** (`.dat`) — Mantid-exported files with a `#` comment header, three whitespace-delimited columns per bank:
 
 ```
 # Time-of-flight         Y                 E
@@ -102,17 +109,19 @@ All three file types are stored in subdirectories within a single parent directo
 # d-Spacing              Y                 E
 ```
 
-Files follow the naming convention `SCAN-BANK_ID-0.dat` (TOF) and `SCAN-BANK_ID-d-0.dat` (d-spacing). All banks and scans are stored in a single directory alongside the logbook.
+Files follow the naming convention `SCANID-BANK-0.dat` (TOF) and `SCANID-BANK-d-0.dat` (d-spacing), where SCANID is a 5–7 digit number and BANK is a single digit (1–5). POLARIS-format names (`POLSCANID-b_BANK.dat`) are also supported. All files are stored in a single directory alongside the logbook.
 
 ### Echem
 
-Electrochemistry data as `.xlsx` or `.txt` with the following columns and absolute timestamps:
+Electrochemistry data as tab-delimited `.txt` with a header row and the following columns:
 
 ```
-Absolute    Elapsed    Current [A]    Voltage [V]
+Timestamp    Voltage    Current
 ```
 
-Absolute timestamps are required for time-correlation with diffraction scans.
+Column detection is keyword-based — headers containing `time`/`date`, `voltage`/`ecell`/`ewe`/`v/`, and `current`/`i/` are recognised automatically. If no header is detected, columns default to time, voltage, current in that order.
+
+Timestamps must be absolute (e.g. `01/02/2024 10:30:00`) and are parsed day-first.
 
 ## Dependencies
 
