@@ -62,13 +62,13 @@ operaxn --check-deps    # Verify dependencies
 
 ### In-House
 
-**1D data** (`.dat`) — whitespace-delimited columns with a `#` comment header containing a `Date` field (ISO 8601) for time-correlation:
+**1D data** (`.dat`) - whitespace-delimited columns with a `#` comment header containing a `Date` field (ISO 8601) for time-correlation:
 
 ```
 tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
 ```
 
-**2D data** (`.edf`) — raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
+**2D data** (`.edf`) - raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
 
 One file per scan, stored in a single directory. Files are sorted by name to determine scan order.
 
@@ -76,26 +76,26 @@ One file per scan, stored in a single directory. Files are sorted by name to det
 
 Synchrotron data requires three file types grouped by scan ID:
 
-**Metadata** (`.nxs`) — NeXus files containing `start_time` and `end_time` fields (under `entry1/`) used for time-correlation with electrochemistry data.
+**Metadata** (`.nxs`) - NeXus files containing `start_time` and `end_time` fields (under `entry1/`) used for time-correlation with electrochemistry data.
 
-**1D data** (`.xy`) — headerless, whitespace-delimited two-column data:
+**1D data** (`.xy`) - headerless, whitespace-delimited two-column data:
 
 ```
 tth(°)    Intensity(a.u.)
 ```
 
-**2D data** (`.hdf`) — 2D detector images stored in HDF5 format (under `entry/data/data`).
+**2D data** (`.hdf`) - 2D detector images stored in HDF5 format (under `entry/data/data`).
 
 All three file types are stored in subdirectories within a single parent directory. Files are matched by scan ID extracted from filenames.
 
 ### Neutron
 
-**Logbook** (`.txt`) — tab-delimited logbook file containing scan IDs (5–7 digit) with start and end timestamps for time-correlation. Timestamps are in `Day Mon DD HH:MM:SS YYYY` format.
+**Logbook** (`.txt`) - tab-delimited logbook file containing scan IDs (5–7 digit) with start and end timestamps for time-correlation. Timestamps are in `Day Mon DD HH:MM:SS YYYY` format.
 
-**TOF and d-spacing data** (`.dat`) — Mantid-exported files with a `#` comment header, three whitespace-delimited columns per bank:
+**TOF and d-spacing data** (`.dat`) - Mantid-exported files with a `#` comment header, three whitespace-delimited columns per bank:
 
 ```
-# Time-of-flight              Y                 E
+# Time-of-flight         Y                 E
 ```
 
 ```
