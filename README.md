@@ -70,7 +70,7 @@ tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
 
 **2D data** (`.edf`) - raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
 
-One file per scan, stored in a single directory. Files are sorted by name to determine scan order (eg: 20231204_1_00446_azimAvg.dat, 20231204_1_00398.edf).
+One file per scan, stored in a single directory. Files are sorted by name to determine scan order (eg: 20231204_1_00500_azimAvg.dat, 20231204_1_00500.edf).
 
 ### Synchrotron
 
