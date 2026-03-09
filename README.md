@@ -55,36 +55,64 @@ nexusgen
 ```bash
 operaxn --help          # Show all options
 operaxn --debug         # Enable debug logging
-operaxn --no-splash     # Skip splash screen
 operaxn --check-deps    # Verify dependencies
-operaxn --info          # Show configuration
 ```
 
 ## Preferred data formats
 
 ### In-House
 
-```bash
-...
+**1D data** (`.dat`) — whitespace-delimited columns with a `#` comment header containing a `Date` field (ISO 8601) for time-correlation:
+
 ```
+tth(°)    Intensity(a.u.)    Sigma_I(a.u.)
+```
+
+**2D data** (`.edf`) — raw 2D detector images in ESRF Data Format. Must include `Date` and `WaveLength` fields in the EDF header.
+
+One file per scan, stored in a single directory. Files are sorted by name to determine scan order.
 
 ### Synchrotron
 
-```bash
-...
+Synchrotron data requires three file types grouped by scan ID:
+
+**Metadata** (`.nxs`) — NeXus files containing `start_time` and `end_time` fields (under `entry1/`) used for time-correlation with electrochemistry data.
+
+**1D data** (`.xy`) — headerless, whitespace-delimited two-column data:
+
 ```
+tth(°)    Intensity(a.u.)
+```
+
+**2D data** (`.hdf`) — 2D detector images stored in HDF5 format (under `entry/data/data`).
+
+All three file types are stored in subdirectories within a single parent directory. Files are matched by scan ID extracted from filenames.
 
 ### Neutron
 
-```bash
-...
+**Logbook** (`.txt`) — tab-delimited logbook file containing scan IDs (5–7 digit) with start and end timestamps for time-correlation. Timestamps are in `Day Mon DD HH:MM:SS YYYY` format.
+
+**TOF and d-spacing data** (`.dat`) — Mantid-exported files with a `#` comment header, three whitespace-delimited columns per bank:
+
 ```
+# Time-of-flight              Y                 E
+```
+
+```
+# d-Spacing              Y                 E
+```
+
+Files follow the naming convention `SCAN-BANK_ID-0.dat` (TOF) and `SCAN-BANK_ID-d-0.dat` (d-spacing). All banks and scans are stored in a single directory alongside the logbook.
 
 ### Echem
 
-```bash
-...
+Electrochemistry data as `.xlsx` or `.txt` with the following columns and absolute timestamps:
+
 ```
+Absolute    Elapsed    Current [A]    Voltage [V]
+```
+
+Absolute timestamps are required for time-correlation with diffraction scans.
 
 ## Dependencies
 
@@ -105,9 +133,7 @@ OperaXN/
   bin/
     operaxn/       # Main visualisation application
     nexusgen/      # Nexus file generator
-  tests/
-    operaxn/
-    nexusgen/
+  examples/        # Example datasets
   pyproject.toml
   requirements.txt
 ```

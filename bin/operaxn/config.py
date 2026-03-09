@@ -12,7 +12,7 @@ from enum import Enum
 # Debug Mode
 # ============================================================================
 
-DEBUG_MODE = os.environ.get("XRD_DEBUG", "0") == "1"
+DEBUG_MODE = os.environ.get("OPERAXN_DEBUG", "0") == "1"
 LOG_LEVEL = "DEBUG" if DEBUG_MODE else "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_FILE = "operaxn.log" if DEBUG_MODE else None

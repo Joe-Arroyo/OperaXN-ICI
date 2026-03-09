@@ -2,11 +2,13 @@
 OperaXN - gui.py
 """
 
+import logging
 import re
 import sys
 import tempfile
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -21,6 +23,8 @@ import psutil
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from .config import *
+
+logger = logging.getLogger(__name__)
 from .dialog import (
     PlotSettingsDialog, ExportOptionsDialog,
     GIFSettingsDialog, ProgressDialog,
@@ -164,8 +168,7 @@ class ApplicationState:
             self.data_cache[key] = data
             self.cache_size_bytes += size
         except (MemoryError, AttributeError) as e:
-            if DEBUG_MODE:
-                print(f"Cache error: {e}")
+            logger.debug("Cache error: %s", e)
             self.data_cache[key] = data
 
     def _evict_cache_entries(self, needed_size: int) -> None:
@@ -218,8 +221,8 @@ class PerformanceMonitor:
 
         self.metrics[operation] = {'time': elapsed, 'memory': memory_delta}
 
-        if elapsed > 1.0 and DEBUG_MODE:
-            print(f"Performance: {operation} took {elapsed:.2f}s")
+        if elapsed > 1.0:
+            logger.debug("Performance: %s took %.2fs", operation, elapsed)
 
 
 class DebouncedUpdate:
@@ -964,8 +967,7 @@ class OPERAXN(tk.Frame):
                 except Empty:
                     continue
                 except Exception as e:
-                    if DEBUG_MODE:
-                        print(f"Worker error: {e}")
+                    logger.debug("Worker error: %s", e)
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -1115,9 +1117,7 @@ class OPERAXN(tk.Frame):
                 self.after(0, self._create_data_arrays)
 
             except Exception as e:
-                import traceback
-                if DEBUG_MODE:
-                    print(f"Error details: {traceback.format_exc()}")
+                logger.debug("Error details: %s", traceback.format_exc())
                 self.after(0, lambda: self._show_message("Error", f"Failed to process files: {str(e)}", "error"))
             finally:
                 self.state.ui_state = UIState.IDLE
@@ -1356,9 +1356,7 @@ class OPERAXN(tk.Frame):
                 })
 
         except Exception as e:
-            import traceback
-            if DEBUG_MODE:
-                print(f"Error details: {traceback.format_exc()}")
+            logger.debug("Error details: %s", traceback.format_exc())
             self._show_message("Error", f"Failed to create plots: {str(e)}", "error")
         finally:
             self.state.ui_state = UIState.IDLE
@@ -1632,8 +1630,7 @@ class OPERAXN(tk.Frame):
                 if self.canvas:
                     self.canvas.draw_idle()
             except Exception as e:
-                if DEBUG_MODE:
-                    print(f"Error updating intensity: {e}")
+                logger.debug("Error updating intensity: %s", e)
 
     def _apply_intensity_to_all(self, current_min: float, current_max: float):
         """Apply intensity range to all scans."""
@@ -1764,13 +1761,11 @@ class OPERAXN(tk.Frame):
                 # Prepare filename
                 filename = os.path.join(base_dir, f"scan_{scan_num:03d}.png")
 
-                # Debug print
-                if DEBUG_MODE:
-                    print(f"Exporting scan {scan_num} to {filename}")
-                    print(f"  Has oned: {scan_data.get('oned') is not None}")
-                    print(f"  Has twod: {scan_data.get('twod') is not None}")
-                    print(f"  Has neutron: {scan_data.get('neutron') is not None}")
-                    print(f"  Intensity limits: {intensity_limits}")
+                logger.debug("Exporting scan %d to %s", scan_num, filename)
+                logger.debug("  Has oned: %s", scan_data.get('oned') is not None)
+                logger.debug("  Has twod: %s", scan_data.get('twod') is not None)
+                logger.debug("  Has neutron: %s", scan_data.get('neutron') is not None)
+                logger.debug("  Intensity limits: %s", intensity_limits)
 
                 export_single_scan(
                     scan_data=scan_data,
@@ -1786,13 +1781,9 @@ class OPERAXN(tk.Frame):
                 success_count += 1
 
             except Exception as e:
-                import traceback
                 error_msg = f"Scan {scan_num}: {str(e)}"
                 failed_scans.append((scan_num, str(e)))
-
-                if DEBUG_MODE:
-                    print(f"Failed to export scan {scan_num}:")
-                    print(traceback.format_exc())
+                logger.debug("Failed to export scan %d:\n%s", scan_num, traceback.format_exc())
 
         progress.destroy()
 
@@ -2021,9 +2012,7 @@ class OPERAXN(tk.Frame):
                         ))
 
             except Exception as e:
-                import traceback
-                if DEBUG_MODE:
-                    print(f"Excel export error: {traceback.format_exc()}")
+                logger.debug("Excel export error: %s", traceback.format_exc())
                 self.after(0, lambda: self._show_message("Error", f"Excel export failed: {str(e)}", "error"))
 
         # Run in thread
