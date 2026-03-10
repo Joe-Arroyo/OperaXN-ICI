@@ -123,6 +123,8 @@ Column detection is keyword-based — headers containing `time`/`date`, `voltage
 
 Timestamps must be absolute (e.g. `01/02/2024 10:30:00`) and are parsed day-first.
 
+Standard electrochemistry data should be uploaded seperately (currently only available in Nexus Generator).
+
 ## Dependencies
 
 - Python >= 3.9
