@@ -617,12 +617,8 @@ class ApplicationManager:
             self._initialise_ui()
 
             # Schedule application initialization
-            if not self.args.no_splash:
-                self.root.after(SPLASH_DURATION_MS - 200, self._initialise_application)
-                self.root.after(SPLASH_DURATION_MS, self._show_main_window)
-            else:
-                self._initialise_application()
-                self._show_main_window()
+            self.root.after(SPLASH_DURATION_MS - 200, self._initialise_application)
+            self.root.after(SPLASH_DURATION_MS, self._show_main_window)
 
             # Start main loop
             self.logger.info("Starting main event loop")
@@ -667,9 +663,8 @@ class ApplicationManager:
         # Set icon if available
         self._set_window_icon()
 
-        # Show splash unless disabled
-        if not self.args.no_splash:
-            self._show_splash()
+        # Show splash screen
+        self._show_splash()
 
     def _show_splash(self) -> None:
         """Show splash screen with status updates."""
@@ -791,20 +786,6 @@ def display_dependency_check() -> int:
     return 0
 
 
-def display_configuration() -> int:
-    """Display current configuration."""
-    print("\n" + "=" * 60)
-    print(f"{APP_NAME} Configuration")
-    print("=" * 60 + "\n")
-
-    print(f"Version: {__version__}")
-    print(f"Copyright: {APP_COPYRIGHT}")
-    print("\nDetailed Configuration:")
-
-    print("\n" + "=" * 60)
-    return 0
-
-
 # ============================================================================
 # Command Line Interface
 # ============================================================================
@@ -817,10 +798,9 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                           # Launch GUI with standard preset
-  %(prog)s --debug                  # Launch with debug logging
-  %(prog)s --no-splash               # Launch without splash screen
-  %(prog)s --info                   # Show configuration and exit
+  %(prog)s                           # Launch GUI
+  %(prog)s --debug                   # Launch with debug logging
+  %(prog)s --check-deps              # Check dependencies and exit
         """
     )
 
@@ -834,18 +814,6 @@ Examples:
         '--debug', '-d',
         action='store_true',
         help='Enable debug mode with verbose logging'
-    )
-
-    parser.add_argument(
-        '--no-splash',
-        action='store_true',
-        help='Skip splash screen on startup'
-    )
-
-    parser.add_argument(
-        '--info', '-i',
-        action='store_true',
-        help='Show configuration information and exit'
     )
 
     parser.add_argument(
@@ -869,9 +837,6 @@ def main(args: Optional[List[str]] = None) -> int:
     # Handle info commands
     if parsed_args.check_deps:
         return display_dependency_check()
-
-    if parsed_args.info:
-        return display_configuration()
 
     # Run application
     app_manager = ApplicationManager(parsed_args)

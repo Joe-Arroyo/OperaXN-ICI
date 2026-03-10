@@ -2,6 +2,7 @@
 Output Module for Data Visualisation
 """
 
+import logging
 import matplotlib
 
 matplotlib.use('Agg')
@@ -19,6 +20,8 @@ from functools import lru_cache
 import threading
 
 from .config import *
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -391,15 +394,13 @@ class NeutronPlotter(BasePlotter):
             if 'd' in measurement_data:
                 return measurement_data['d'], "d-spacing [Å]"
             elif 'tof' in measurement_data:
-                if DEBUG_MODE:
-                    print(f"Warning: d-spacing not available for bank {bank_num}, showing TOF")
+                logger.debug("d-spacing not available for bank %s, showing TOF", bank_num)
                 return measurement_data['tof'], "Time of Flight [μs]"
         else:
             if 'tof' in measurement_data:
                 return measurement_data['tof'], "Time of Flight [μs]"
             elif 'd' in measurement_data:
-                if DEBUG_MODE:
-                    print(f"Warning: TOF not available for bank {bank_num}, showing d-spacing")
+                logger.debug("TOF not available for bank %s, showing d-spacing", bank_num)
                 return measurement_data['d'], "d-spacing [Å]"
 
         return None, None
