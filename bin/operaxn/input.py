@@ -596,6 +596,11 @@ class FileProcessor:
                     supported_exts = [ft.value for ft in FileType if ft != FileType.ZIP]
 
                     if member_ext in supported_exts:
+                        # Validate path to prevent ZIP Slip (path traversal)
+                        target = os.path.realpath(os.path.join(self.tempdir, member))
+                        if not target.startswith(os.path.realpath(self.tempdir) + os.sep):
+                            logger.warning(f"Skipping ZIP entry with invalid path: {member}")
+                            continue
                         extracted_path = archive.extract(member, self.tempdir)
                         original_path = os.path.join(zip_path, member)
                         extracted.append((extracted_path, original_path))

@@ -36,3 +36,6 @@ Thumbs.db
 *.nxs
 *.hdf
 *.edf
+
+# Local working files
+notes.txt

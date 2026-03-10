@@ -288,9 +288,9 @@ class EnhancedSplashScreen(WindowManager):
         center_x = self.width // 2
 
         # Title font
-        title_font = ('Arial', 36, 'bold')
-        subtitle_font = ('Arial', 11)
-        version_font = ('Arial', 9)
+        title_font = (OPERAXNTheme._SANS, 36, 'bold')
+        subtitle_font = (OPERAXNTheme._SANS, 11)
+        version_font = (OPERAXNTheme._SANS, 9)
 
         # Split title for coloring
         opera_text = "OPERA"
@@ -343,7 +343,7 @@ class EnhancedSplashScreen(WindowManager):
             self.canvas.create_text(
                 center_x, 245,
                 text=f"© {APP_COPYRIGHT}",
-                font=('Arial', 8),
+                font=(OPERAXNTheme._SANS, 8),
                 fill=OPERAXNTheme.COLORS['text_secondary'],
                 anchor='center'
             )
@@ -403,7 +403,7 @@ class EnhancedSplashScreen(WindowManager):
         self.ui_elements['status_label'] = self.canvas.create_text(
             center_x, 280,
             text="Initialising application...",
-            font=('Arial', 9),
+            font=(OPERAXNTheme._SANS, 9),
             fill=OPERAXNTheme.COLORS['text_secondary'],
             anchor='center'
         )
@@ -412,7 +412,7 @@ class EnhancedSplashScreen(WindowManager):
         self.ui_elements['loading_dots'] = self.canvas.create_text(
             center_x + 110, 280,
             text="",
-            font=('Arial', 9),
+            font=(OPERAXNTheme._SANS, 9),
             fill=OPERAXNTheme.COLORS['accent_primary'],
             anchor='center'
         )

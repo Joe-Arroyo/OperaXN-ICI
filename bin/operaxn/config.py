@@ -61,13 +61,25 @@ class OPERAXNTheme:
         'disabled_text': '#6c7583'
     }
 
+    _PLATFORM = platform.system()
+    _SANS = (
+        'Segoe UI' if _PLATFORM == 'Windows'
+        else 'Helvetica Neue' if _PLATFORM == 'Darwin'
+        else 'DejaVu Sans'
+    )
+    _MONO = (
+        'Consolas' if _PLATFORM == 'Windows'
+        else 'Menlo' if _PLATFORM == 'Darwin'
+        else 'DejaVu Sans Mono'
+    )
+
     FONTS = {
-        'title': ('Segoe UI', 12, 'bold'),
-        'heading': ('Segoe UI', 11, 'bold'),
-        'body': ('Segoe UI', 10),
-        'small': ('Segoe UI', 9),
-        'button': ('Segoe UI', 10, 'bold'),
-        'mono': ('Consolas', 10)
+        'title': (_SANS, 12, 'bold'),
+        'heading': (_SANS, 11, 'bold'),
+        'body': (_SANS, 10),
+        'small': (_SANS, 9),
+        'button': (_SANS, 10, 'bold'),
+        'mono': (_MONO, 10)
     }
 
     PADDING = {

@@ -1,7 +1,6 @@
 [build-system]
 requires = [
     "hatchling>=1.6.0",
-    "hatch-vcs",
 ]
 build-backend = "hatchling.build"
 
@@ -31,6 +30,11 @@ maintainers = [
     { name = "Ashok S. Menon", email = "Ashok.Menon@warwick.ac.uk" },
 ]
 
+keywords = [
+    "operando", "diffraction", "XRD", "neutron", "electrochemistry",
+    "NeXus", "visualisation", "synchrotron",
+]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
@@ -39,10 +43,12 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Chemistry",
     "Topic :: Scientific/Engineering :: Physics",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
@@ -58,6 +64,7 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/matthewarlopowell/OperaXN"
+"Bug Tracker" = "https://github.com/matthewarlopowell/OperaXN/issues"
 
 [project.scripts]
 operaxn = "operaxn.main:main"
@@ -69,3 +76,6 @@ packages = ["bin/operaxn", "bin/nexusgen"]
 [tool.hatch.build.targets.wheel.sources]
 "bin/operaxn" = "operaxn"
 "bin/nexusgen" = "nexusgen"
+
+[tool.hatch.build.targets.sdist]
+include = ["bin/operaxn", "bin/nexusgen", "LICENSE", "README.md"]
