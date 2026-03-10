@@ -38,13 +38,13 @@ pip install -e .
 
 ## Usage
 
-### Launch the visualiser
+### Launch OperaXN
 
 ```bash
 operaxn
 ```
 
-### Launch the NeXus file generator
+### Launch Nexus Generator
 
 ```bash
 nexusgen
