@@ -13,11 +13,8 @@ from enum import Enum
 # ============================================================================
 
 DEBUG_MODE = os.environ.get("OPERAXN_DEBUG", "0") == "1"
-LOG_LEVEL = "DEBUG" if DEBUG_MODE else "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_FILE = "operaxn.log" if DEBUG_MODE else None
-ENABLE_PERFORMANCE_MONITORING = DEBUG_MODE
-PERFORMANCE_LOG_THRESHOLD_MS = 1000
 
 
 # ============================================================================
@@ -116,6 +113,19 @@ INTERPOLATION_METHOD = "bilinear"
 # Data Processing
 LARGE_IMAGE_THRESHOLD = 2_000_000
 INTENSITY_SAMPLE_SIZE = 20_000
+MAX_DATASET_ELEMENTS = 100_000_000  # threshold for sampling large HDF5 datasets
+TARGET_DISPLAY_PIXELS = 2048 * 2048  # target pixel count for downsampling
+PARALLEL_PROCESSING_THRESHOLD = 20  # min files to trigger parallel processing
+LRU_CACHE_MAXSIZE = 128
+MAX_EXPOSURE_TIME = 3600  # seconds, reject entries above this
+TIME_MATCH_TOLERANCE = 60  # seconds, for echem-to-scan matching
+SECONDS_PER_HOUR = 3600.0
+FILE_READ_RETRIES = 2
+FILE_READ_RETRY_DELAY = 0.5  # seconds
+
+# Plot Layout
+VMIN_FLOOR = 1e-10  # floor value to avoid log(0) in logarithmic plots
+DEFAULT_AXIS_PADDING_PERCENT = 5.0
 
 # Plot Appearance
 COLORMAP = "YlGnBu_r"
@@ -173,8 +183,6 @@ ECHEM_TIME_TOLERANCE = 300  # 5 minutes
 
 EXCEL_ENGINE = "openpyxl"
 CSV_ENCODING = "utf-8"
-SUPPORTED_IMAGE_FORMATS = [".png", ".pdf", ".svg", ".jpg", ".tiff"]
-DEFAULT_IMAGE_FORMAT = ".png"
 
 # ============================================================================
 # File Type Settings

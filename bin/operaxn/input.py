@@ -3,13 +3,16 @@ Input Module for Data Processing
 """
 
 import logging
+import os
 import re
+import sys
 import tempfile
 import threading
 import zipfile
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from typing import Callable, List, Optional, Tuple, Union, Any, Dict
 
@@ -17,7 +20,26 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from .config import *
+from .config import (
+    BATCH_SIZE,
+    CACHE_ENABLED,
+    DataSourceType,
+    ECHEM_TIME_TOLERANCE,
+    FILE_READ_RETRIES,
+    FILE_READ_RETRY_DELAY,
+    LRU_CACHE_MAXSIZE,
+    MAX_CACHE_SIZE_MB,
+    MAX_DATASET_ELEMENTS,
+    MAX_EXPOSURE_TIME,
+    MAX_WORKERS,
+    OPERAXNTheme,
+    PARALLEL_PROCESSING,
+    PARALLEL_PROCESSING_THRESHOLD,
+    SYNCHROTRON_MAX_DISPLAY_SIZE,
+    TARGET_DISPLAY_PIXELS,
+    TIME_MATCH_TOLERANCE,
+    WINDOW_SIZES,
+)
 
 try:
     import fabio
@@ -55,7 +77,7 @@ def _nan_to_none(value: Any) -> Any:
 # ============================================================================
 
 class FileType(Enum):
-    """Enumeration of supported file types."""
+    """Supported file type extensions."""
     DAT = ".dat"
     EDF = ".edf"
     TXT = ".txt"
@@ -66,7 +88,7 @@ class FileType(Enum):
 
 
 class DataType(Enum):
-    """Types of scientific data."""
+    """Scientific data type identifiers."""
     ONED = "oned"
     TWOD = "twod"
     ECHEM = "echem"
@@ -76,14 +98,14 @@ class DataType(Enum):
 
 
 class TimeMethod(Enum):
-    """Time correlation methods."""
+    """Absolute vs. relative time correlation mode."""
     ABSOLUTE = "absolute"
     RELATIVE = "relative"
 
 
 @dataclass
 class FileRecord:
-    """Represents a processed file record."""
+    """Single processed file with path, classification, and metadata."""
     path: str
     original_path: str
     oned: Optional[str] = None
@@ -98,7 +120,7 @@ class FileRecord:
 
 @dataclass
 class Scan:
-    """Represents a complete scan with all associated data."""
+    """Single scan with timestamps, file paths, and correlated echem values."""
     scan_num: int
     oned: Optional[str] = None
     twod: Optional[str] = None
@@ -117,7 +139,7 @@ class Scan:
     timestamp_for_correlation: Optional[pd.Timestamp] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert scan to dictionary."""
+        """Convert scan to plain dictionary."""
         return {
             "scan_num": self.scan_num,
             "oned": self.oned,
@@ -143,28 +165,27 @@ class Scan:
 # ============================================================================
 
 class FileCache:
-    """Thread-safe file data cache."""
+    """Thread-safe LRU file data cache with size limits."""
 
-    def __init__(self, max_size_mb: int = MAX_CACHE_SIZE_MB):
-        self.cache = {}
-        self.max_size_bytes = max_size_mb * 1024 * 1024
-        self.current_size = 0
-        self.lock = threading.Lock()
-        self.access_count = {}
+    def __init__(self, max_size_mb: int = MAX_CACHE_SIZE_MB) -> None:
+        self.cache: Dict[str, Any] = {}
+        self.max_size_bytes: int = max_size_mb * 1024 * 1024
+        self.current_size: int = 0
+        self.lock: threading.Lock = threading.Lock()
+        self.access_count: Dict[str, int] = {}
 
     def get(self, key: str) -> Optional[Any]:
-        """Get item from cache."""
+        """Return cached item or None."""
         with self.lock:
             if key in self.cache:
                 self.access_count[key] = self.access_count.get(key, 0) + 1
                 return self.cache[key]
         return None
 
-    def put(self, key: str, value: Any, size_bytes: int = None) -> None:
-        """Put item in cache with size management."""
+    def put(self, key: str, value: Any, size_bytes: Optional[int] = None) -> None:
+        """Store item, evicting LRU entries if over size limit."""
         with self.lock:
             if size_bytes is None:
-                import sys
                 size_bytes = sys.getsizeof(value)
 
             while self.current_size + size_bytes > self.max_size_bytes and self.cache:
@@ -175,7 +196,7 @@ class FileCache:
             self.access_count[key] = 1
 
     def _evict_lru(self) -> None:
-        """Evict least recently used item."""
+        """Evict least-accessed item."""
         if not self.cache:
             return
 
@@ -183,12 +204,11 @@ class FileCache:
 
         if lru_key in self.cache:
             value = self.cache.pop(lru_key)
-            import sys
             self.current_size -= sys.getsizeof(value)
             self.access_count.pop(lru_key, None)
 
     def clear(self) -> None:
-        """Clear the cache."""
+        """Remove all cached entries."""
         with self.lock:
             self.cache.clear()
             self.access_count.clear()
@@ -204,15 +224,15 @@ _file_cache = FileCache()
 # ============================================================================
 
 class DataReader(ABC):
-    """Abstract base class for data readers with caching."""
+    """Abstract base for file readers with optional caching."""
 
     @abstractmethod
     def _read_impl(self, path: str) -> np.ndarray:
-        """Implementation of file reading."""
+        """Read raw data from file."""
         pass
 
     def read(self, path: str, use_cache: bool = True) -> np.ndarray:
-        """Read data from file with optional caching."""
+        """Read data, returning cached result when available."""
         if not use_cache or not CACHE_ENABLED:
             return self._read_impl(path)
 
@@ -226,16 +246,15 @@ class DataReader(ABC):
         return data
 
     def _get_cache_key(self, path: str) -> str:
-        """Generate cache key for file."""
-        import os
+        """Generate cache key from path, size, and mtime."""
         stat = os.stat(path)
         return f"{path}_{stat.st_size}_{stat.st_mtime}"
 
 
 class DATReader(DataReader):
-    """Enhanced DAT reader for both XRD and neutron data."""
+    """Reader for DAT files (XRD and neutron)."""
 
-    def __init__(self, data_type: str = "xrd"):
+    def __init__(self, data_type: str = "xrd") -> None:
         super().__init__()
         self.data_type = data_type
 
@@ -290,7 +309,7 @@ class DATReader(DataReader):
 
 
 class EDFReader(DataReader):
-    """Reader for EDF files."""
+    """Reader for EDF 2D detector images via fabio."""
 
     def _read_impl(self, path: str) -> np.ndarray:
         """Read EDF file as 2D array."""
@@ -307,7 +326,7 @@ class EDFReader(DataReader):
 
 
 class XYReader(DataReader):
-    """Reader for XY files (synchrotron integrated data)."""
+    """Reader for XY synchrotron integrated data."""
 
     def _read_impl(self, path: str) -> np.ndarray:
         """Read XY file as 2-column array."""
@@ -321,7 +340,7 @@ class XYReader(DataReader):
 
 
 class HDFReader(DataReader):
-    """Reader for HDF5 files with optional downsampling for display."""
+    """Reader for HDF5 2D detector data with display downsampling."""
 
     COMMON_DATA_PATHS = [
         '/entry/instrument/detector/data',
@@ -340,10 +359,10 @@ class HDFReader(DataReader):
         (512, 512),
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.max_display_size = SYNCHROTRON_MAX_DISPLAY_SIZE
-        self.downsample_enabled = True
+        self.max_display_size: int = SYNCHROTRON_MAX_DISPLAY_SIZE
+        self.original_shape: Optional[Tuple[int, ...]] = None
 
     def _read_impl(self, path: str) -> np.ndarray:
         """Read HDF file as 2D array."""
@@ -356,20 +375,19 @@ class HDFReader(DataReader):
 
                 data = self._process_data_shape(data)
                 data = self._apply_floor_clipping(data)
-
-                if self.downsample_enabled:
-                    data = self._downsample_if_needed(data)
+                self.original_shape = data.shape
+                data = self._downsample_if_needed(data)
 
                 return data
         except Exception as e:
             raise IOError(f"Error reading HDF file {path}: {e}")
 
     def _find_data_array(self, h5file: h5py.File) -> Optional[np.ndarray]:
-        """Find the main data array in HDF file."""
+        """Locate the primary data array in an HDF5 file."""
         for path in self.COMMON_DATA_PATHS:
             if path in h5file:
                 dataset = h5file[path]
-                if dataset.size > 50_000_000:
+                if dataset.size > MAX_DATASET_ELEMENTS:
                     return self._sample_large_dataset(dataset)
                 else:
                     return np.array(dataset)
@@ -378,7 +396,7 @@ class HDFReader(DataReader):
         largest_dataset = None
         largest_size = 0
 
-        def find_largest(name, obj):
+        def find_largest(name: str, obj: Any) -> None:
             nonlocal largest_dataset, largest_size
             if isinstance(obj, h5py.Dataset):
                 if obj.size > largest_size and obj.ndim in [2, 3]:
@@ -389,15 +407,16 @@ class HDFReader(DataReader):
 
         if largest_dataset:
             dataset = h5file[largest_dataset]
-            if dataset.size > 50_000_000:
+            if dataset.size > MAX_DATASET_ELEMENTS:
                 return self._sample_large_dataset(dataset)
             else:
                 return np.array(dataset)
 
         return None
 
-    def _sample_large_dataset(self, dataset: h5py.Dataset) -> np.ndarray:
-        """Sample very large dataset for initial loading."""
+    @staticmethod
+    def _sample_large_dataset(dataset: h5py.Dataset) -> np.ndarray:
+        """Sub-sample a large dataset to fit in memory."""
         shape = dataset.shape
 
         if dataset.ndim == 3:
@@ -405,9 +424,9 @@ class HDFReader(DataReader):
         else:
             data = dataset
 
-        if data.size > 50_000_000:
+        if data.size > MAX_DATASET_ELEMENTS:
             height, width = data.shape[-2:]
-            step = max(1, int(np.sqrt(data.size / (2048 * 2048))))
+            step = max(1, int(np.sqrt(data.size / TARGET_DISPLAY_PIXELS)))
             if dataset.ndim == 2:
                 return dataset[::step, ::step]
             else:
@@ -416,7 +435,7 @@ class HDFReader(DataReader):
         return np.array(data)
 
     def _process_data_shape(self, data: np.ndarray) -> np.ndarray:
-        """Process data array to ensure 2D shape."""
+        """Ensure data is a 2D array."""
         if data.ndim == 3:
             return data[0]
         elif data.ndim == 1:
@@ -427,7 +446,7 @@ class HDFReader(DataReader):
             raise ValueError(f"Unsupported data shape: {data.shape}")
 
     def _reshape_1d_data(self, data: np.ndarray) -> np.ndarray:
-        """Reshape 1D data to 2D based on known detector sizes."""
+        """Reshape 1D array to 2D using known detector dimensions."""
         for height, width in self.DETECTOR_SIZES:
             if data.size == height * width:
                 return data.reshape((height, width))
@@ -438,8 +457,9 @@ class HDFReader(DataReader):
 
         raise ValueError(f"Cannot determine shape for 1D data of size {data.size}")
 
-    def _apply_floor_clipping(self, data: np.ndarray) -> np.ndarray:
-        """Apply floor clipping to remove noise."""
+    @staticmethod
+    def _apply_floor_clipping(data: np.ndarray) -> np.ndarray:
+        """Clip values below the positive-pixel floor."""
         pos = data > 0
         if pos.any():
             floor = float(data[pos].min())
@@ -447,7 +467,10 @@ class HDFReader(DataReader):
         return data
 
     def _downsample_if_needed(self, data: np.ndarray) -> np.ndarray:
-        """Downsample data if larger than max display size."""
+        """Downsample if either dimension exceeds display limit; 0 = disabled."""
+        if self.max_display_size <= 0:
+            return data
+
         height, width = data.shape
 
         if height > self.max_display_size or width > self.max_display_size:
@@ -456,7 +479,7 @@ class HDFReader(DataReader):
         return data
 
     def _downsample_for_display(self, data: np.ndarray) -> np.ndarray:
-        """Downsample data to fit within max display size."""
+        """Stride-downsample data to fit max display size."""
         height, width = data.shape
 
         scale_factor = max(
@@ -478,33 +501,33 @@ class HDFReader(DataReader):
 # ============================================================================
 
 class FileProcessor:
-    """Enhanced file processing for all data types with better error handling."""
+    """Collects, extracts, and groups files from paths and ZIPs."""
 
     def __init__(self, progress_callback: Optional[Callable] = None,
-                 data_source: DataSourceType = DataSourceType.INHOUSE):
+                 data_source: DataSourceType = DataSourceType.INHOUSE) -> None:
         self.progress_callback = progress_callback
         self.data_source = data_source
-        self.tempdir = None
-        self.processed_files = set()
+        self.tempdir: Optional[str] = None
+        self.processed_files: set = set()
         self.synchrotron_grouper = SynchrotronFileGrouper()
         self.nexus_extractor = NexusMetadataExtractor()
 
-    def __enter__(self):
+    def __enter__(self) -> "FileProcessor":
         self.tempdir = tempfile.mkdtemp()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.tempdir and os.path.exists(self.tempdir):
             import shutil
             shutil.rmtree(self.tempdir, ignore_errors=True)
 
     def update_progress(self, message: str) -> None:
-        """Update progress callback if available."""
+        """Emit progress message if callback is set."""
         if self.progress_callback:
             self.progress_callback(message)
 
     def process_paths(self, selected_paths: List[str]) -> List[FileRecord]:
-        """Process selected paths with improved logic."""
+        """Collect and classify all files from selected paths."""
         all_files = self._collect_all_files(selected_paths)
 
         if not all_files:
@@ -527,7 +550,7 @@ class FileProcessor:
                 remaining_files.append((extracted_path, original_path))
 
         if remaining_files:
-            if PARALLEL_PROCESSING and len(remaining_files) > 20:
+            if PARALLEL_PROCESSING and len(remaining_files) > PARALLEL_PROCESSING_THRESHOLD:
                 remaining_records = self._process_remaining_files_parallel(remaining_files)
             else:
                 remaining_records = self._process_remaining_files_sequential(remaining_files)
@@ -536,7 +559,7 @@ class FileProcessor:
         return records
 
     def _process_neutron_files(self, all_files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process neutron-specific files."""
+        """Create FileRecords for neutron data and metadata files."""
         records = []
 
         for extracted_path, original_path in all_files:
@@ -560,7 +583,7 @@ class FileProcessor:
         return records
 
     def _collect_all_files(self, selected_paths: List[str]) -> List[Tuple[str, str]]:
-        """Collect all files from selected paths."""
+        """Gather files from paths, extracting ZIPs as needed."""
         all_files = []
 
         for path in selected_paths:
@@ -579,7 +602,7 @@ class FileProcessor:
         return all_files
 
     def _extract_zip_files(self, zip_path: str) -> List[Tuple[str, str]]:
-        """Extract relevant files from ZIP."""
+        """Extract supported files from a ZIP archive."""
         extracted = []
 
         try:
@@ -611,8 +634,7 @@ class FileProcessor:
         return extracted
 
     def _collect_directory_files(self, directory: str) -> List[Tuple[str, str]]:
-        """Collect all relevant files from directory."""
-        import os
+        """Recursively collect supported files from a directory."""
         files = []
 
         for root, dirs, filenames in os.walk(directory):
@@ -634,7 +656,7 @@ class FileProcessor:
         return files
 
     def _process_synchrotron_groups(self, synchrotron_groups: Dict[str, Dict[str, str]]) -> List[FileRecord]:
-        """Process all synchrotron groups."""
+        """Create FileRecords from grouped synchrotron file sets."""
         records = []
 
         for base_id, file_group in synchrotron_groups.items():
@@ -648,7 +670,7 @@ class FileProcessor:
         return records
 
     def _process_remaining_files_parallel(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process remaining files in parallel."""
+        """Process unclassified files using a thread pool."""
         chunk_size = max(BATCH_SIZE, len(files) // MAX_WORKERS)
         chunks = [files[i:i + chunk_size]
                   for i in range(0, len(files), chunk_size)]
@@ -663,11 +685,11 @@ class FileProcessor:
         return records
 
     def _process_remaining_files_sequential(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process remaining files sequentially."""
+        """Process unclassified files in a single thread."""
         return self._process_remaining_chunk(files)
 
     def _process_remaining_chunk(self, files: List[Tuple[str, str]]) -> List[FileRecord]:
-        """Process a chunk of remaining files."""
+        """Convert a batch of files into FileRecords."""
         records = []
         for extracted_path, original_path in files:
             ext = os.path.splitext(extracted_path)[1].lower()
@@ -680,7 +702,7 @@ class FileProcessor:
         return records
 
     def _create_synchrotron_record(self, base_id: str, file_group: Dict[str, str]) -> Optional[FileRecord]:
-        """Create record for synchrotron file group."""
+        """Build a FileRecord from a synchrotron NXS group."""
         nxs_path = file_group.get('nxs')
         if not nxs_path:
             return None
@@ -711,20 +733,20 @@ class FileProcessor:
 # ============================================================================
 
 class FileClassifierBase(ABC):
-    """Abstract base class for file classifiers."""
+    """Abstract base for file type classifiers."""
 
     @abstractmethod
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify file and extract metadata."""
+        """Return (data_type, timestamp, exposure_time) for a file."""
         pass
 
 
 class DATClassifier(FileClassifierBase):
-    """Classifier for DAT files."""
+    """Extract timestamp and exposure from DAT headers."""
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=LRU_CACHE_MAXSIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify DAT file and extract metadata."""
+        """Classify DAT file as 1D data and extract header metadata."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = [f.readline() for _ in range(30)]
@@ -759,11 +781,11 @@ class DATClassifier(FileClassifierBase):
 
 
 class EDFClassifier(FileClassifierBase):
-    """Classifier for EDF files."""
+    """Extract timestamp and exposure from EDF headers."""
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=LRU_CACHE_MAXSIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify EDF file and extract metadata."""
+        """Classify EDF file as 2D data and extract header metadata."""
         if not FABIO_AVAILABLE:
             return None, None, None
 
@@ -792,13 +814,13 @@ class EDFClassifier(FileClassifierBase):
 
 
 class TXTClassifier(FileClassifierBase):
-    """Classifier for TXT files (electrochemistry data OR neutron metadata)."""
+    """Distinguish echem data from neutron metadata in TXT files."""
 
-    ECHEM_KEYWORDS = ["time", "ecell", "voltage", "current", "i/", "ewe", "v/"]
+    ECHEM_KEYWORDS = ["time", "absolute", "ecell", "voltage", "current", "i/", "ewe", "v/"]
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=LRU_CACHE_MAXSIZE)
     def classify(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
-        """Classify TXT file as echem or neutron metadata."""
+        """Classify TXT as echem data or neutron logbook."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = []
@@ -841,9 +863,9 @@ class TXTClassifier(FileClassifierBase):
 
 
 class FileClassificationManager:
-    """Manages file classification and metadata extraction."""
+    """Dispatch classifier by file type and populate DataFrame columns."""
 
-    def __init__(self, data_source: DataSourceType = DataSourceType.INHOUSE):
+    def __init__(self, data_source: DataSourceType = DataSourceType.INHOUSE) -> None:
         self.data_source = data_source
         self.classifiers = {
             FileType.DAT: DATClassifier(),
@@ -852,7 +874,7 @@ class FileClassificationManager:
         }
 
     def classify_files(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Classify files and extract metadata."""
+        """Classify each row's file and populate metadata columns."""
         df = df.copy()
 
         for col in ["oned", "twod", "echem", "neutron_meta"]:
@@ -910,10 +932,11 @@ class FileClassificationManager:
 # ============================================================================
 
 class NeutronMetadataParser:
-    """Parser for neutron metadata files."""
+    """Parse neutron logbook TXT files into scan DataFrames."""
 
-    def parse(self, path: str) -> Optional[pd.DataFrame]:
-        """Parse neutron metadata file and return DataFrame."""
+    @staticmethod
+    def parse(path: str) -> Optional[pd.DataFrame]:
+        """Parse neutron logbook and return scan entries as DataFrame."""
         try:
             logger.debug(f"Parsing neutron metadata file: {path}")
 
@@ -981,10 +1004,10 @@ class NeutronMetadataParser:
 
 
 class NeutronFileGrouper:
-    """Groups neutron files by scan ID and measurement type."""
+    """Group neutron DAT files by scan ID and measurement number."""
 
     def group_neutron_files(self, file_list: List[str]) -> Dict[str, Dict[str, Dict[str, str]]]:
-        """Group neutron files by scan ID and measurement type."""
+        """Return {scan_id: {measurement: {type: path}}} mapping."""
         groups = {}
 
         logger.debug(f"Processing {len(file_list)} neutron files")
@@ -1013,8 +1036,9 @@ class NeutronFileGrouper:
         logger.info(f"Grouped {len(groups)} scans")
         return groups
 
-    def _extract_neutron_file_info(self, filename: str) -> Optional[Dict[str, str]]:
-        """Extract scan ID, measurement number, and type from neutron filename."""
+    @staticmethod
+    def _extract_neutron_file_info(filename: str) -> Optional[Dict[str, str]]:
+        """Parse scan ID, measurement number, and type from filename."""
         name_no_ext = filename[:-4] if filename.endswith('.dat') else filename
         is_dspacing = ('-d-' in name_no_ext or '_d_' in name_no_ext
                        or name_no_ext.endswith('_d') or name_no_ext.endswith('-d'))
@@ -1076,7 +1100,7 @@ class NeutronFileGrouper:
 # ============================================================================
 
 class EchemParser:
-    """Parser for electrochemistry data files."""
+    """Parse tab-delimited electrochemistry TXT files."""
 
     COLUMN_PATTERNS = {
         "time": ["time", "date"],
@@ -1085,7 +1109,7 @@ class EchemParser:
     }
 
     def parse(self, path: str) -> Optional[pd.DataFrame]:
-        """Parse echem file and return DataFrame."""
+        """Read echem TXT and return timestamp/voltage/current DataFrame."""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -1110,16 +1134,17 @@ class EchemParser:
 
             return None
 
-        except Exception:
+        except Exception as e:
+            logger.error("Failed to parse echem file: %s", e)
             return None
 
     def _detect_columns(self, header_line: str) -> Dict[str, int]:
-        """Detect column indices from header."""
+        """Map column names to indices via keyword matching."""
         header_parts = [part.strip().lower() for part in header_line.strip().split("\t")]
 
-        columns = {"time": 0, "voltage": 1, "current": 2}
+        detected: Dict[str, int] = {}
 
-        column_mapping = {}
+        column_mapping: Dict[str, str] = {}
         for col_type, patterns in self.COLUMN_PATTERNS.items():
             for pattern in patterns:
                 column_mapping[pattern] = col_type
@@ -1128,18 +1153,32 @@ class EchemParser:
             clean_part = part.replace("(", "").replace(")", "").replace("/", "").replace(" ", "")
 
             if clean_part in column_mapping:
-                columns[column_mapping[clean_part]] = i
+                detected[column_mapping[clean_part]] = i
                 continue
 
             for key, value in column_mapping.items():
                 if key in part:
-                    columns[value] = i
+                    detected[value] = i
                     break
+
+        # Default positional indices for undetected columns
+        columns = {"time": 0, "voltage": 1, "current": 2}
+        columns.update(detected)
+
+        # Resolve index collisions between defaults and detected columns
+        used_indices = set(detected.values())
+        for col_name in columns:
+            if col_name not in detected and columns[col_name] in used_indices:
+                logger.warning(
+                    "Default column '%s' at index %d collides with detected column. Disabling.",
+                    col_name, columns[col_name]
+                )
+                columns[col_name] = -1
 
         return columns
 
     def _parse_data_lines(self, lines: List[str], columns: Dict[str, int]) -> List[Dict[str, Any]]:
-        """Parse data lines into records."""
+        """Convert tab-delimited lines to dicts of timestamp, voltage, current."""
         data = []
 
         for line in lines:
@@ -1164,7 +1203,7 @@ class EchemParser:
                 continue
 
             current = None
-            if len(parts) > columns["current"]:
+            if 0 <= columns["current"] < len(parts):
                 try:
                     current = float(parts[columns["current"]])
                 except (ValueError, IndexError):
@@ -1180,10 +1219,10 @@ class EchemParser:
 
 
 class SynchrotronFileGrouper:
-    """Groups synchrotron files (NXS, HDF, XY) by scan ID."""
+    """Group NXS, HDF, and XY files by scan ID."""
 
     def group_files(self, file_dict: Dict[str, str]) -> Dict[str, Dict[str, str]]:
-        """Group related synchrotron files by scan ID."""
+        """Return {scan_id: {ext_key: path}} grouping."""
         groups = {}
         nxs_to_id = {}
 
@@ -1219,7 +1258,7 @@ class SynchrotronFileGrouper:
         return groups
 
     def _extract_scan_id(self, filename: str) -> Optional[str]:
-        """Extract scan ID from filename."""
+        """Extract trailing numeric scan ID from filename."""
         base_name = os.path.splitext(filename)[0]
         base_name = base_name.replace('_integration', '')
 
@@ -1227,7 +1266,7 @@ class SynchrotronFileGrouper:
         return match.group(1) if match else None
 
     def _determine_group_id(self, basename: str, ext: str, nxs_to_id: Dict[str, str]) -> Optional[str]:
-        """Determine which group a file belongs to."""
+        """Match a file to its NXS-based group ID."""
         file_id = self._extract_scan_id(basename)
 
         if ext == '.hdf':
@@ -1258,7 +1297,7 @@ class SynchrotronFileGrouper:
 
 
 class NexusMetadataExtractor:
-    """Extracts metadata from NeXus (NXS) files."""
+    """Extract timestamps and exposure times from NeXus files."""
 
     TIMESTAMP_PATHS = [
         '/entry1/start_time',
@@ -1279,9 +1318,9 @@ class NexusMetadataExtractor:
         '/entry1/instrument/detector/preset',
     ]
 
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=LRU_CACHE_MAXSIZE)
     def extract(self, nxs_path: str) -> Optional[Dict[str, Any]]:
-        """Extract timestamp and exposure time from NXS file."""
+        """Return dict with timestamp and exposure_time from NXS."""
         try:
             with h5py.File(nxs_path, 'r') as f:
                 metadata = {}
@@ -1296,15 +1335,16 @@ class NexusMetadataExtractor:
 
                 midpoint = self._calculate_midpoint_timestamp(f)
                 if midpoint:
-                    metadata['timestamp'] = midpoint
+                    metadata['midpoint_timestamp'] = midpoint
 
                 return metadata if metadata else None
 
-        except Exception:
+        except Exception as e:
+            logger.error("Failed to extract NXS metadata from %s: %s", nxs_path, e)
             return None
 
     def _extract_timestamp(self, h5file: h5py.File) -> Optional[str]:
-        """Extract timestamp from NXS file."""
+        """Read start_time from known HDF5 paths."""
         for path in self.TIMESTAMP_PATHS:
             if path in h5file:
                 timestamp_str = self._decode_value(h5file[path][()])
@@ -1312,7 +1352,7 @@ class NexusMetadataExtractor:
         return None
 
     def _extract_exposure_time(self, h5file: h5py.File) -> Optional[float]:
-        """Extract exposure time from NXS file."""
+        """Read or calculate exposure time in seconds."""
         for path in self.EXPOSURE_PATHS:
             if path in h5file:
                 try:
@@ -1336,13 +1376,13 @@ class NexusMetadataExtractor:
                     end_dt = pd.to_datetime(end_time)
                     exposure_seconds = (end_dt - start_dt).total_seconds()
 
-                    if 0 < exposure_seconds < 3600:
+                    if 0 < exposure_seconds < MAX_EXPOSURE_TIME:
                         return exposure_seconds
 
         return None
 
     def _calculate_midpoint_timestamp(self, h5file: h5py.File) -> Optional[str]:
-        """Calculate midpoint timestamp from start and end times."""
+        """Compute midpoint between start_time and end_time."""
         for start_path, end_path in self.TIME_PATH_PAIRS:
             if start_path in h5file and end_path in h5file:
                 start_str = self._decode_value(h5file[start_path][()])
@@ -1364,14 +1404,14 @@ class NexusMetadataExtractor:
 
     @staticmethod
     def _decode_value(value: Any) -> str:
-        """Decode value from HDF5 file."""
+        """Decode bytes to str for HDF5 values."""
         if isinstance(value, bytes):
             return value.decode()
         return str(value)
 
     @staticmethod
     def _parse_nexus_timestamp(timestamp_str: str) -> str:
-        """Parse NeXus timestamp format to standard format."""
+        """Normalise ISO/NeXus timestamp to 'YYYY-MM-DD HH:MM:SS'."""
         if 'T' in timestamp_str:
             base_time = timestamp_str.split('+')[0].split('Z')[0]
             if '.' in base_time:
@@ -1385,10 +1425,10 @@ class NexusMetadataExtractor:
 # ============================================================================
 
 class ScanProcessor:
-    """Enhanced scan processor with better timestamp correlation."""
+    """Build scan lists and correlate with echem timestamps."""
 
     def __init__(self, time_method: TimeMethod = TimeMethod.ABSOLUTE,
-                 data_source: DataSourceType = DataSourceType.INHOUSE):
+                 data_source: DataSourceType = DataSourceType.INHOUSE) -> None:
         self.time_method = time_method
         self.data_source = data_source
         self.xrd_reference_time = None
@@ -1398,7 +1438,7 @@ class ScanProcessor:
         self.neutron_parser = NeutronMetadataParser()
 
     def process_scans(self, df: pd.DataFrame) -> Tuple[List[Scan], pd.DataFrame]:
-        """Process scans and correlate with echem data."""
+        """Build scans from DataFrame and correlate with echem."""
         combined_echem_df = self._process_echem_data(df)
 
         neutron_metadata_df = None
@@ -1408,23 +1448,26 @@ class ScanProcessor:
             if neutron_metadata_df is not None:
                 logger.info(f"Found {len(neutron_metadata_df)} neutron scans")
 
-        if self.time_method == TimeMethod.RELATIVE:
-            self._set_reference_times(df, combined_echem_df, neutron_metadata_df)
-
         scan_list = self._create_scan_list(df, neutron_metadata_df)
 
+        # Compute midpoint-adjusted correlation timestamps
         self._adjust_for_exposure_time(scan_list)
 
+        if self.time_method == TimeMethod.RELATIVE:
+            self._set_reference_times(df, combined_echem_df, neutron_metadata_df, scan_list)
+
+        # Correlate scans with echem using absolute timestamps (before formatting)
         if not combined_echem_df.empty:
             self._correlate_with_echem(scan_list, combined_echem_df)
 
+        # Convert display timestamps to relative HH:MM:SS strings
         if self.time_method == TimeMethod.RELATIVE:
             self._apply_relative_time(scan_list, combined_echem_df)
 
         return scan_list, combined_echem_df
 
     def _process_neutron_metadata(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """Process neutron metadata files."""
+        """Parse and combine all neutron metadata files."""
         neutron_meta_paths = df[df["neutron_meta"].notna()]["neutron_meta"].tolist()
 
         logger.info(f"Found {len(neutron_meta_paths)} neutron metadata files")
@@ -1451,7 +1494,7 @@ class ScanProcessor:
         return None
 
     def _process_echem_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Process all echem files and combine data."""
+        """Parse and concatenate all echem files."""
         echem_paths = df[df["echem"].notna()]["echem"].tolist()
         echem_dfs = []
 
@@ -1474,43 +1517,56 @@ class ScanProcessor:
         return pd.DataFrame(columns=["timestamp", "echem_data", "current", "source_file"])
 
     def _set_reference_times(self, df: pd.DataFrame, echem_df: pd.DataFrame,
-                             neutron_df: Optional[pd.DataFrame] = None) -> None:
-        """Set reference times for relative time mode."""
-        # XRD reference time
-        xrd_timestamps = []
-        for idx, row in df.iterrows():
-            if pd.notna(row.get("timestamp")) and (pd.notna(row.get("oned")) or pd.notna(row.get("twod"))):
-                try:
-                    xrd_timestamps.append(pd.to_datetime(row["timestamp"]))
-                except (ValueError, TypeError):
-                    pass
+                             neutron_df: Optional[pd.DataFrame] = None,
+                             scan_list: Optional[List[Scan]] = None) -> None:
+        """Set t=0 reference for each data stream in relative time mode."""
+        # XRD/synchrotron reference: earliest scan midpoint
+        if self.data_source != DataSourceType.NEUTRON and scan_list:
+            mids = [
+                scan.timestamp_for_correlation
+                for scan in scan_list
+                if scan.timestamp_for_correlation is not None and (scan.oned or scan.twod)
+            ]
+            self.xrd_reference_time = min(mids) if mids else None
+        else:
+            xrd_timestamps = []
+            for _, row in df.iterrows():
+                if pd.notna(row.get("timestamp")) and (pd.notna(row.get("oned")) or pd.notna(row.get("twod"))):
+                    try:
+                        xrd_timestamps.append(pd.to_datetime(row["timestamp"]))
+                    except (ValueError, TypeError):
+                        pass
+            self.xrd_reference_time = min(xrd_timestamps) if xrd_timestamps else None
 
-        if xrd_timestamps:
-            self.xrd_reference_time = min(xrd_timestamps)
-
-        # Echem reference time
+        # Echem reference: earliest echem point
         if not echem_df.empty:
             try:
                 self.echem_reference_time = pd.to_datetime(echem_df["timestamp"]).min()
             except (ValueError, TypeError):
                 self.echem_reference_time = None
 
-        # Neutron reference time
-        if neutron_df is not None and not neutron_df.empty:
+        # Neutron reference: earliest neutron midpoint
+        if self.data_source == DataSourceType.NEUTRON and scan_list:
+            mids = [
+                scan.timestamp_for_correlation
+                for scan in scan_list
+                if scan.timestamp_for_correlation is not None
+            ]
+            self.neutron_reference_time = min(mids) if mids else None
+        elif neutron_df is not None and not neutron_df.empty:
             neutron_timestamps = []
-            for idx, row in neutron_df.iterrows():
+            for _, row in neutron_df.iterrows():
                 if pd.notna(row.get("start_time")):
                     try:
                         neutron_timestamps.append(pd.to_datetime(row["start_time"]))
                     except (ValueError, TypeError):
                         pass
+            self.neutron_reference_time = min(neutron_timestamps) if neutron_timestamps else None
 
-            if neutron_timestamps:
-                self.neutron_reference_time = min(neutron_timestamps)
-
-    def _create_neutron_scan_list(self, df: pd.DataFrame,
+    @staticmethod
+    def _create_neutron_scan_list(df: pd.DataFrame,
                                   neutron_metadata_df: pd.DataFrame) -> List[Scan]:
-        """Create scan list for neutron data."""
+        """Build Scan objects from neutron metadata and grouped files."""
         scan_list = []
 
         neutron_files = []
@@ -1577,7 +1633,7 @@ class ScanProcessor:
 
     def _create_scan_list(self, df: pd.DataFrame,
                           neutron_metadata_df: Optional[pd.DataFrame] = None) -> List[Scan]:
-        """Create list of scans from DataFrame."""
+        """Create sorted, numbered Scan list from classified DataFrame."""
         scan_list = []
 
         if self.data_source == DataSourceType.NEUTRON and neutron_metadata_df is not None:
@@ -1642,7 +1698,7 @@ class ScanProcessor:
         return scan_list
 
     def _adjust_for_exposure_time(self, scan_list: List[Scan]) -> None:
-        """Adjust timestamps to midpoint of exposure for echem correlation."""
+        """Shift timestamps to exposure midpoint for echem correlation."""
         logger.debug("Adjusting timestamps to midpoint")
         for i, scan in enumerate(scan_list):
             exposure_time = self._determine_exposure_time(scan)
@@ -1659,7 +1715,7 @@ class ScanProcessor:
                     scan.timestamp_for_correlation = pd.to_datetime(scan.timestamp) if scan.timestamp else None
 
     def _determine_exposure_time(self, scan: Scan) -> Optional[float]:
-        """Determine exposure time for a scan."""
+        """Return best available exposure time in seconds."""
         if self.data_source == DataSourceType.NEUTRON and scan.neutron_start and scan.neutron_end:
             start = pd.to_datetime(scan.neutron_start)
             end = pd.to_datetime(scan.neutron_end)
@@ -1675,14 +1731,14 @@ class ScanProcessor:
         return None
 
     def _correlate_with_echem(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate scans with echem data."""
+        """Dispatch to absolute or relative echem correlation."""
         if self.time_method == TimeMethod.RELATIVE:
             self._correlate_relative_time(scan_list, echem_df)
         else:
             self._correlate_absolute_time(scan_list, echem_df)
 
     def _correlate_relative_time(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate using relative time."""
+        """Match scans to echem by relative elapsed seconds."""
         reference_time = None
         if self.data_source == DataSourceType.NEUTRON:
             reference_time = self.neutron_reference_time
@@ -1720,17 +1776,18 @@ class ScanProcessor:
                 scan.current = None
                 scan.echem_timestamp = None
 
-    def _correlate_absolute_time(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Correlate using absolute time."""
+    @staticmethod
+    def _correlate_absolute_time(scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
+        """Match scans to nearest echem point by absolute timestamp."""
         echem_timestamps = None
         try:
             echem_timestamps = pd.to_datetime(echem_df["timestamp"])
         except (ValueError, TypeError):
             try:
-                echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S.%f', dayfirst=True)
+                echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S.%f')
             except (ValueError, TypeError):
                 try:
-                    echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S', dayfirst=True)
+                    echem_timestamps = pd.to_datetime(echem_df["timestamp"], format='%d/%m/%Y %H:%M:%S')
                 except (ValueError, TypeError):
                     logger.error("Could not parse echem timestamps")
                     return
@@ -1771,7 +1828,7 @@ class ScanProcessor:
                 scan.echem_timestamp = None
 
     def _apply_relative_time(self, scan_list: List[Scan], echem_df: pd.DataFrame) -> None:
-        """Apply relative time formatting."""
+        """Convert scan and echem timestamps to HH:MM:SS offsets."""
         reference_time = None
         if self.data_source == DataSourceType.NEUTRON:
             reference_time = self.neutron_reference_time
@@ -1804,7 +1861,7 @@ class ScanProcessor:
 
     @staticmethod
     def _format_relative_time(seconds: float) -> str:
-        """Format seconds as HH:MM:SS."""
+        """Format elapsed seconds as HH:MM:SS string."""
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
@@ -1816,7 +1873,7 @@ class ScanProcessor:
 # ============================================================================
 
 class DataReaderFactory:
-    """Factory for creating appropriate data readers."""
+    """Dispatch DataReader by file extension."""
 
     READERS = {
         FileType.EDF: EDFReader(),
@@ -1829,7 +1886,7 @@ class DataReaderFactory:
 
     @classmethod
     def get_reader(cls, file_path: str, is_neutron: bool = False) -> DataReader:
-        """Get appropriate reader for file."""
+        """Return the DataReader for a given file path."""
         if is_neutron and file_path.endswith('.dat'):
             return cls.NEUTRON_READER
 
@@ -1843,7 +1900,7 @@ class DataReaderFactory:
 
     @classmethod
     def read_file(cls, file_path: str, use_cache: bool = True, is_neutron: bool = False) -> np.ndarray:
-        """Read file using appropriate reader with caching."""
+        """Read file with the appropriate reader and optional caching."""
         reader = cls.get_reader(file_path, is_neutron)
         return reader.read(file_path, use_cache)
 
@@ -1857,7 +1914,7 @@ def process_paths(selected_paths: List[str],
                   time_method: Optional[TimeMethod] = None,
                   data_source: DataSourceType = DataSourceType.INHOUSE) -> Tuple[
                   List[Dict[str, Any]], pd.DataFrame, str]:
-    """Main entry point for processing selected paths."""
+    """Process paths into scan dicts, echem DataFrame, and time method."""
     with FileProcessor(progress_callback, data_source) as processor:
         records = processor.process_paths(selected_paths)
 
@@ -1887,7 +1944,7 @@ def process_paths(selected_paths: List[str],
 
 
 def make_neutron_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[int, Dict[str, Dict[str, Any]]]:
-    """Create neutron data arrays from scans."""
+    """Build {scan_num: {measurement: {type: {x,y}}}} from neutron scans."""
     plot_data = {}
     reader = DATReader("neutron")
 
@@ -1900,39 +1957,20 @@ def make_neutron_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[
         for measurement_num, measurement_files in scan["neutron_files"].items():
             measurement_data = {}
 
-            if "tof" in measurement_files:
-                try:
+            for key in ("tof", "d"):
+                if key not in measurement_files:
+                    continue
+                path = measurement_files[key]
+
+                def _load(p=path):
                     if state and hasattr(state, 'get_cached_data'):
-                        data = state.get_cached_data(
-                            measurement_files["tof"],
-                            lambda: reader.read(measurement_files["tof"])
-                        )
-                    else:
-                        data = reader.read(measurement_files["tof"])
+                        return state.get_cached_data(p, lambda: reader.read(p))
+                    return reader.read(p)
 
-                    measurement_data["tof"] = {
-                        "x": data[:, 0],
-                        "y": data[:, 1]
-                    }
-                except Exception as e:
-                    logger.error(f"Error reading TOF file: {e}")
-
-            if "d" in measurement_files:
-                try:
-                    if state and hasattr(state, 'get_cached_data'):
-                        data = state.get_cached_data(
-                            measurement_files["d"],
-                            lambda: reader.read(measurement_files["d"])
-                        )
-                    else:
-                        data = reader.read(measurement_files["d"])
-
-                    measurement_data["d"] = {
-                        "x": data[:, 0],
-                        "y": data[:, 1]
-                    }
-                except Exception as e:
-                    logger.error(f"Error reading d-spacing file: {e}")
+                label = "TOF" if key == "tof" else "d-spacing"
+                data = _read_with_retry(_load, path, scan["scan_num"], label)
+                if data is not None:
+                    measurement_data[key] = {"x": data[:, 0], "y": data[:, 1]}
 
             if measurement_data:
                 scan_data[measurement_num] = measurement_data
@@ -1943,8 +1981,27 @@ def make_neutron_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[
     return plot_data
 
 
+def _read_with_retry(reader_func: Callable, path: str, scan_num: int,
+                     data_label: str) -> Optional[np.ndarray]:
+    """Retry reader_func up to FILE_READ_RETRIES on failure."""
+    import time
+    last_error = None
+    for attempt in range(FILE_READ_RETRIES + 1):
+        try:
+            return reader_func()
+        except Exception as e:
+            last_error = e
+            if attempt < FILE_READ_RETRIES:
+                logger.debug(f"Retry {attempt + 1}/{FILE_READ_RETRIES} for "
+                             f"{data_label} scan {scan_num} ({path}): {e}")
+                time.sleep(FILE_READ_RETRY_DELAY)
+    logger.error(f"Failed to read {data_label} for scan {scan_num} "
+                 f"after {FILE_READ_RETRIES + 1} attempts: {last_error}")
+    return None
+
+
 def make_oned_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[int, Dict[str, Any]]:
-    """Create 1D data arrays from scans with caching."""
+    """Build {scan_num: {x, y, timestamp, echem, current}} from 1D scans."""
     plot_data = {}
     reader_factory = DataReaderFactory()
 
@@ -1952,61 +2009,66 @@ def make_oned_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[int
         if not scan.get("oned"):
             continue
 
-        try:
+        def _load(path=scan["oned"]):
             if state and hasattr(state, 'get_cached_data'):
-                data = state.get_cached_data(
-                    scan["oned"],
-                    lambda: reader_factory.read_file(scan["oned"])
-                )
-            else:
-                data = reader_factory.read_file(scan["oned"])
+                return state.get_cached_data(
+                    path, lambda: reader_factory.read_file(path))
+            return reader_factory.read_file(path)
 
+        data = _read_with_retry(_load, scan["oned"], scan["scan_num"], "1D data")
+
+        if data is not None:
             plot_data[scan["scan_num"]] = {
                 "x": data[:, 0],
                 "y": data[:, 1],
                 "timestamp": scan["timestamp"],
                 "echem": scan.get("echem"),
-                "current": scan.get("current")
+                "current": scan.get("current"),
             }
-        except Exception as e:
-            logger.error(f"Error reading 1D data for scan {scan['scan_num']}: {e}")
+        else:
+            plot_data[scan["scan_num"]] = {"error": True}
 
     return plot_data
 
 
 def make_twod_arrays(scans: List[Dict[str, Any]], state: Any = None) -> Dict[int, Dict[str, Any]]:
-    """Create 2D data arrays from scans with caching."""
+    """Build {scan_num: {image, timestamp, echem, current}} from 2D scans."""
     plot_data = {}
     reader_factory = DataReaderFactory()
+
+    # Configure HDFReader with user-selected display size
+    hdf_reader = reader_factory.READERS.get(FileType.HDF)
+    if hdf_reader and state and hasattr(state, 'synchrotron_max_size'):
+        hdf_reader.max_display_size = state.synchrotron_max_size
 
     for scan in scans:
         if not scan.get("twod"):
             continue
 
-        try:
+        def _load(path=scan["twod"]):
             if state and hasattr(state, 'get_cached_data'):
-                image = state.get_cached_data(
-                    scan["twod"],
-                    lambda: reader_factory.read_file(scan["twod"])
-                )
-            else:
-                image = reader_factory.read_file(scan["twod"])
+                return state.get_cached_data(
+                    path, lambda: reader_factory.read_file(path))
+            return reader_factory.read_file(path)
 
+        image = _read_with_retry(_load, scan["twod"], scan["scan_num"], "2D data")
+
+        if image is not None:
             plot_data[scan["scan_num"]] = {
                 "image": image,
                 "timestamp": scan["timestamp"],
                 "echem": scan.get("echem"),
-                "current": scan.get("current")
+                "current": scan.get("current"),
             }
-        except Exception as e:
-            logger.error(f"Error reading 2D data for scan {scan['scan_num']}: {e}")
+        else:
+            plot_data[scan["scan_num"]] = {"error": True}
 
     return plot_data
 
 
 def make_echem_arrays(echem_df: Optional[pd.DataFrame],
                       time_method: str = "absolute") -> Dict[str, Union[np.ndarray, List]]:
-    """Create echem data arrays."""
+    """Convert echem DataFrame to {x, y, current, timestamps} arrays."""
     if echem_df is None or echem_df.empty:
         return {
             "x": np.array([]),
@@ -2055,7 +2117,7 @@ def get_correlated_data(scans: List[Dict[str, Any]],
                         echem_df: Optional[pd.DataFrame],
                         scan_num: int,
                         state: Any = None) -> Optional[Dict[str, Any]]:
-    """Get all correlated data for a specific scan with caching (including neutron)."""
+    """Load all data (1D, 2D, neutron, echem) for a single scan."""
     scan = next((s for s in scans if s["scan_num"] == scan_num), None)
     if not scan:
         return None
@@ -2071,35 +2133,24 @@ def get_correlated_data(scans: List[Dict[str, Any]],
 
     # Standard XRD data
     if scan.get("oned"):
-        try:
+        def _load_oned(path=scan["oned"]):
             if state and hasattr(state, 'get_cached_data'):
-                data = state.get_cached_data(
-                    scan["oned"],
-                    lambda: reader_factory.read_file(scan["oned"])
-                )
-            else:
-                data = reader_factory.read_file(scan["oned"])
+                return state.get_cached_data(path, lambda: reader_factory.read_file(path))
+            return reader_factory.read_file(path)
 
-            result["oned"] = {
-                "x": data[:, 0],
-                "y": data[:, 1]
-            }
-        except Exception:
-            result["oned"] = None
+        data = _read_with_retry(_load_oned, scan["oned"], scan_num, "1D data")
+        result["oned"] = {"x": data[:, 0], "y": data[:, 1]} if data is not None else None
     else:
         result["oned"] = None
 
     if scan.get("twod"):
-        try:
+        def _load_twod(path=scan["twod"]):
             if state and hasattr(state, 'get_cached_data'):
-                result["twod"] = state.get_cached_data(
-                    scan["twod"],
-                    lambda: reader_factory.read_file(scan["twod"])
-                )
-            else:
-                result["twod"] = reader_factory.read_file(scan["twod"])
-        except Exception:
-            result["twod"] = None
+                return state.get_cached_data(path, lambda: reader_factory.read_file(path))
+            return reader_factory.read_file(path)
+
+        image = _read_with_retry(_load_twod, scan["twod"], scan_num, "2D data")
+        result["twod"] = image
     else:
         result["twod"] = None
 
@@ -2111,39 +2162,20 @@ def get_correlated_data(scans: List[Dict[str, Any]],
         for measurement_num, measurement_files in scan["neutron_files"].items():
             measurement_data = {}
 
-            if "tof" in measurement_files:
-                try:
+            for key in ("tof", "d"):
+                if key not in measurement_files:
+                    continue
+                path = measurement_files[key]
+
+                def _load_neutron(p=path):
                     if state and hasattr(state, 'get_cached_data'):
-                        data = state.get_cached_data(
-                            measurement_files["tof"],
-                            lambda: reader.read(measurement_files["tof"])
-                        )
-                    else:
-                        data = reader.read(measurement_files["tof"])
+                        return state.get_cached_data(p, lambda: reader.read(p))
+                    return reader.read(p)
 
-                    measurement_data["tof"] = {
-                        "x": data[:, 0],
-                        "y": data[:, 1]
-                    }
-                except Exception:
-                    pass
-
-            if "d" in measurement_files:
-                try:
-                    if state and hasattr(state, 'get_cached_data'):
-                        data = state.get_cached_data(
-                            measurement_files["d"],
-                            lambda: reader.read(measurement_files["d"])
-                        )
-                    else:
-                        data = reader.read(measurement_files["d"])
-
-                    measurement_data["d"] = {
-                        "x": data[:, 0],
-                        "y": data[:, 1]
-                    }
-                except Exception:
-                    pass
+                label = "TOF" if key == "tof" else "d-spacing"
+                data = _read_with_retry(_load_neutron, path, scan_num, label)
+                if data is not None:
+                    measurement_data[key] = {"x": data[:, 0], "y": data[:, 1]}
 
             if measurement_data:
                 neutron_data[measurement_num] = measurement_data
@@ -2162,7 +2194,7 @@ def get_correlated_data(scans: List[Dict[str, Any]],
 
 def _find_nearest_echem(scan: Dict[str, Any],
                         echem_df: pd.DataFrame) -> Optional[Dict[str, Any]]:
-    """Find nearest echem measurement to scan."""
+    """Return nearest echem point within tolerance of scan timestamp."""
     if echem_df.empty:
         return None
 
@@ -2194,7 +2226,7 @@ def _find_nearest_echem(scan: Dict[str, Any],
                 time_diffs = np.abs(echem_seconds - scan_seconds)
                 nearest_idx = time_diffs.argmin()
 
-                if time_diffs[nearest_idx] <= 60:  # Within 60 seconds
+                if time_diffs[nearest_idx] <= TIME_MATCH_TOLERANCE:
                     row = echem_df.iloc[nearest_idx]
                     return {
                         "timestamp": row["timestamp"],
@@ -2213,7 +2245,7 @@ def _find_nearest_echem(scan: Dict[str, Any],
             time_diffs = abs(echem_timestamps - scan_time)
             nearest_idx = time_diffs.argmin()
 
-            if time_diffs.iloc[nearest_idx].total_seconds() <= 60:
+            if time_diffs.iloc[nearest_idx].total_seconds() <= TIME_MATCH_TOLERANCE:
                 row = echem_df.iloc[nearest_idx]
                 return {
                     "timestamp": row["timestamp"],
@@ -2232,11 +2264,11 @@ def _find_nearest_echem(scan: Dict[str, Any],
 # ============================================================================
 
 class TimeSortingDialog:
-    """Dialog for selecting time sorting method with consistent theming."""
+    """Tkinter dialog for choosing absolute vs. relative time."""
 
     @staticmethod
     def ask_method() -> TimeMethod:
-        """Show dialog and return selected method."""
+        """Show modal dialog and return chosen TimeMethod."""
         import tkinter as tk
 
         dialog = tk.Toplevel()
@@ -2316,14 +2348,14 @@ class TimeSortingDialog:
 # Performance Utility Functions
 # ============================================================================
 
-def clear_global_cache():
+def clear_global_cache() -> None:
     """Clear the global file cache."""
     global _file_cache
     _file_cache.clear()
 
 
 def get_cache_stats() -> Dict[str, Any]:
-    """Get cache statistics."""
+    """Return cache size, item count, and limit."""
     global _file_cache
     return {
         "size_bytes": _file_cache.current_size,

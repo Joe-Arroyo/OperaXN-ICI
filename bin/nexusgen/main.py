@@ -1,4 +1,4 @@
-"""OperaXN - Nexus Generator."""
+"""Nexus Generator."""
 
 import logging
 import os

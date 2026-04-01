@@ -2,13 +2,50 @@
 Dialog Module for OperaXN
 """
 
+import logging
+import tkinter as tk
 import tkinter.ttk as ttk
+from dataclasses import dataclass, field
 from tkinter import messagebox
-from typing import List, Callable, Tuple, Any
+from typing import Dict, List, Callable, Tuple, Any
 
 import numpy as np
 
-from .config import *
+from .output import clear_plot_cache
+from .config import (
+    DataSourceType,
+    DEFAULT_GIF_DPI,
+    DEFAULT_GIF_FPS,
+    DEFAULT_GIF_LOOP,
+    DEFAULT_TWOD_XMAX_PERCENT,
+    DEFAULT_TWOD_XMIN_PERCENT,
+    EXPORT_DPI,
+    OPERAXNTheme,
+    SYNCHROTRON_WAVELENGTH,
+    WINDOW_SIZES,
+    XRAY_WAVELENGTH,
+)
+
+
+# ============================================================================
+# Result Dataclasses
+# ============================================================================
+
+@dataclass
+class ExportOptions:
+    """Structured result from ExportOptionsDialog."""
+    export_type: str
+    dpi: int
+    plot_types: Dict[str, bool]
+
+
+@dataclass
+class GIFSettings:
+    """Structured result from GIFSettingsDialog."""
+    fps: int
+    dpi: int
+    loop: int
+    scan_list: List[int] = field(default_factory=list)
 
 
 # ============================================================================
@@ -16,9 +53,9 @@ from .config import *
 # ============================================================================
 
 class BaseDialog(tk.Toplevel):
-    """Base class for all dialogs with common functionality and theming."""
+    """Base dialog with common functionality and theming."""
 
-    def __init__(self, master, title: str, geometry: str):
+    def __init__(self, master: tk.Misc, title: str, geometry: str) -> None:
         super().__init__(master)
         self.master = master
         self.result = None
@@ -40,7 +77,7 @@ class BaseDialog(tk.Toplevel):
         # Protocol for window close
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
-    def _center_window(self):
+    def _center_window(self) -> None:
         """Center dialog on parent window."""
         self.update_idletasks()
 
@@ -72,8 +109,8 @@ class BaseDialog(tk.Toplevel):
         self.wait_window()
         return self.result
 
-    def cancel(self):
-        """Cancel dialog."""
+    def cancel(self) -> None:
+        """Cancel dialog and discard result."""
         self.result = None
         self.destroy()
 
@@ -81,11 +118,11 @@ class BaseDialog(tk.Toplevel):
     # Common UI Helper Methods
     # ========================================================================
 
-    def create_themed_label(self, parent=None, text: str = "",
+    def create_themed_label(self, parent: tk.Widget = None, text: str = "",
                             font_type: str = "body",
                             fg_color: str = None,
                             **pack_options) -> tk.Label:
-        """Create a themed label with consistent styling."""
+        """Create a themed label."""
         parent = parent or self
         font = OPERAXNTheme.FONTS.get(font_type, OPERAXNTheme.FONTS['body'])
         fg = fg_color or OPERAXNTheme.COLORS['text_primary']
@@ -103,7 +140,7 @@ class BaseDialog(tk.Toplevel):
 
         return label
 
-    def create_themed_button(self, parent=None, text: str = "",
+    def create_themed_button(self, parent: tk.Widget = None, text: str = "",
                              command: Callable = None,
                              style: str = "primary",
                              width: int = 12) -> tk.Button:
@@ -151,7 +188,7 @@ class BaseDialog(tk.Toplevel):
 
     def create_button_frame(self, buttons: List[Tuple[str, Callable, str]],
                             pady: int = 20) -> tk.Frame:
-        """Create a frame with multiple buttons."""
+        """Create a button row from (text, command, style) tuples."""
         frame = tk.Frame(self, bg=OPERAXNTheme.COLORS['bg_primary'])
         frame.pack(pady=pady)
 
@@ -161,7 +198,7 @@ class BaseDialog(tk.Toplevel):
 
         return frame
 
-    def create_themed_labelframe(self, parent=None, text: str = "", **kwargs) -> tk.LabelFrame:
+    def create_themed_labelframe(self, parent: tk.Widget = None, text: str = "", **kwargs) -> tk.LabelFrame:
         """Create a themed label frame."""
         parent = parent or self
         bg_color = OPERAXNTheme.COLORS.get('bg_secondary' if parent != self else 'bg_primary')
@@ -181,7 +218,7 @@ class BaseDialog(tk.Toplevel):
 
         return tk.LabelFrame(parent, **defaults)
 
-    def create_themed_entry(self, parent=None, textvariable=None,
+    def create_themed_entry(self, parent: tk.Widget = None, textvariable: tk.Variable = None,
                             width: int = 12, **kwargs) -> tk.Entry:
         """Create a themed entry widget."""
         parent = parent or self
@@ -203,7 +240,7 @@ class BaseDialog(tk.Toplevel):
 
         return tk.Entry(parent, **defaults)
 
-    def create_themed_scale(self, parent=None, variable=None,
+    def create_themed_scale(self, parent: tk.Widget = None, variable: tk.Variable = None,
                             from_: float = 0, to: float = 100,
                             orient: str = "horizontal",
                             length: int = 200,
@@ -231,8 +268,8 @@ class BaseDialog(tk.Toplevel):
 
         return scale
 
-    def create_themed_radiobutton(self, parent=None, text: str = "",
-                                  variable=None, value=None,
+    def create_themed_radiobutton(self, parent: tk.Widget = None, text: str = "",
+                                  variable: tk.Variable = None, value: Any = None,
                                   command: Callable = None,
                                   fg_color: str = None) -> tk.Radiobutton:
         """Create a themed radio button."""
@@ -262,14 +299,14 @@ class BaseDialog(tk.Toplevel):
 # ============================================================================
 
 class DataSourceSelectionDialog(BaseDialog):
-    """Dialog for selecting data source type."""
+    """Data source type selection dialog."""
 
-    def __init__(self, master):
+    def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, "Select Data Source", "400x275")
         self._create_widgets()
 
-    def _create_widgets(self):
-        """Create dialog widgets."""
+    def _create_widgets(self) -> None:
+        """Build data source selection widgets."""
         # Title
         self.create_themed_label(
             text="Select Your Data Source Type",
@@ -305,10 +342,8 @@ class DataSourceSelectionDialog(BaseDialog):
             ("Cancel", self.cancel, "secondary")
         ])
 
-    def _confirm(self):
+    def _confirm(self) -> None:
         """Confirm selection and close dialog."""
-        from .config import DataSourceType
-
         source_map = {
             "inhouse": DataSourceType.INHOUSE,
             "synchrotron": DataSourceType.SYNCHROTRON,
@@ -324,9 +359,9 @@ class DataSourceSelectionDialog(BaseDialog):
 # ============================================================================
 
 class PlotSettingsDialog(BaseDialog):
-    """Dialog for plot settings configuration."""
+    """Plot settings configuration dialog."""
 
-    def __init__(self, master, config: Any, on_update: Callable):
+    def __init__(self, master: tk.Misc, config: Any, on_update: Callable) -> None:
         is_neutron = (hasattr(config, 'data_source') and
                       config.data_source == DataSourceType.NEUTRON)
         height = "475" if is_neutron else "375"
@@ -338,8 +373,8 @@ class PlotSettingsDialog(BaseDialog):
 
         self._create_widgets()
 
-    def _create_widgets(self):
-        """Create dialog widgets."""
+    def _create_widgets(self) -> None:
+        """Build plot settings tabs and controls."""
         # Setup notebook style
         self._setup_notebook_style()
 
@@ -364,8 +399,8 @@ class PlotSettingsDialog(BaseDialog):
         )
         close_btn.pack(pady=(0, 10))
 
-    def _setup_notebook_style(self):
-        """Setup themed notebook style."""
+    def _setup_notebook_style(self) -> None:
+        """Configure themed notebook style."""
         style = ttk.Style()
         style.theme_use('clam')
         style.configure('TNotebook', background=OPERAXNTheme.COLORS['bg_primary'])
@@ -377,9 +412,9 @@ class PlotSettingsDialog(BaseDialog):
                   background=[('selected', OPERAXNTheme.COLORS['bg_tertiary'])],
                   foreground=[('selected', OPERAXNTheme.COLORS['accent_primary'])])
 
-    def _create_range_entry_row(self, parent, label: str, var, row: int,
-                                col: int, key: str, on_change: Callable = None):
-        """Create a range entry row with label and entry."""
+    def _create_range_entry_row(self, parent: tk.Widget, label: str, var: tk.StringVar, row: int,
+                                col: int, key: str, on_change: Callable = None) -> tk.Entry:
+        """Create a labeled range entry row."""
         self.create_themed_label(parent, label, font_type="body").grid(
             row=row, column=col, padx=5, pady=5
         )
@@ -395,9 +430,9 @@ class PlotSettingsDialog(BaseDialog):
 
         return entry
 
-    def _create_scale_with_label(self, parent, label: str, var_name: str,
-                                 value: float, row: int):
-        """Create scale with value label."""
+    def _create_scale_with_label(self, parent: tk.Widget, label: str, var_name: str,
+                                 value: float, row: int) -> None:
+        """Create scale with percentage value label."""
         self.create_themed_label(parent, label, font_type="body").grid(
             row=row, column=0, padx=5, pady=5, sticky='w'
         )
@@ -422,15 +457,15 @@ class PlotSettingsDialog(BaseDialog):
             self._apply_settings()
         ])
 
-    def _update_scale_label(self, var_name: str, value: str):
+    def _update_scale_label(self, var_name: str, value: str) -> None:
         """Update scale value label."""
         label_var_name = f"{var_name}_label"
         if hasattr(self, label_var_name):
             label = getattr(self, label_var_name)
             label.config(text=f"{float(value):.0f}%")
 
-    def _validate_entry(self, key: str, var):
-        """Validate entry field - empty for auto."""
+    def _validate_entry(self, key: str, var: tk.StringVar) -> None:
+        """Validate entry field; empty treated as auto-scale."""
         try:
             value_str = var.get().strip()
 
@@ -448,8 +483,8 @@ class PlotSettingsDialog(BaseDialog):
             var.set("")
             self._set_config_value(key, None)
 
-    def _set_config_value(self, key: str, value: Any):
-        """Set config value based on key."""
+    def _set_config_value(self, key: str, value: Any) -> None:
+        """Set config attribute by key name."""
         mapping = {
             'xmin': 'oned_xmin', 'xmax': 'oned_xmax',
             'ymin': 'oned_ymin', 'ymax': 'oned_ymax',
@@ -461,7 +496,7 @@ class PlotSettingsDialog(BaseDialog):
         if hasattr(self.config, config_key):
             setattr(self.config, config_key, value)
 
-    def _create_neutron_tab(self, notebook: ttk.Notebook):
+    def _create_neutron_tab(self, notebook: ttk.Notebook) -> None:
         """Create neutron settings tab."""
         tab = tk.Frame(notebook, bg=OPERAXNTheme.COLORS['bg_secondary'])
         notebook.add(tab, text="Neutron Settings")
@@ -473,13 +508,13 @@ class PlotSettingsDialog(BaseDialog):
         self.neutron_display_var = tk.BooleanVar(value=self.config.show_neutron_dspacing)
 
         self.create_themed_radiobutton(
-            mode_frame, "Time of Flight (TOF) [μs]",
+            mode_frame, "Time of Flight (TOF) (μs)",
             self.neutron_display_var, False,
             self._on_neutron_mode_change
         ).pack(anchor="w", pady=5)
 
         self.create_themed_radiobutton(
-            mode_frame, "d-spacing [Å]",
+            mode_frame, "d-spacing (Å)",
             self.neutron_display_var, True,
             self._on_neutron_mode_change
         ).pack(anchor="w", pady=5)
@@ -525,7 +560,7 @@ class PlotSettingsDialog(BaseDialog):
             return f"{value:.1e}"
         return str(value)
 
-    def _on_neutron_mode_change(self):
+    def _on_neutron_mode_change(self) -> None:
         """Handle neutron display mode change."""
         # Clear X-axis limits when switching modes
         self.neutron_xmin_var.set("")
@@ -535,8 +570,8 @@ class PlotSettingsDialog(BaseDialog):
 
         self._apply_neutron_settings()
 
-    def _apply_neutron_settings(self):
-        """Apply neutron settings."""
+    def _apply_neutron_settings(self) -> None:
+        """Apply neutron settings and refresh plots."""
         if hasattr(self, 'neutron_display_var'):
             self.config.show_neutron_dspacing = self.neutron_display_var.get()
 
@@ -547,7 +582,6 @@ class PlotSettingsDialog(BaseDialog):
                     self._validate_entry(key, getattr(self, var_name))
 
             # Clear cache and update
-            from .output import clear_plot_cache
             clear_plot_cache()
 
             if self.on_update:
@@ -560,7 +594,7 @@ class PlotSettingsDialog(BaseDialog):
             if hasattr(self.main_app, 'canvas') and self.main_app.canvas:
                 self.main_app.canvas.draw_idle()
 
-    def _create_oned_tab(self, notebook: ttk.Notebook):
+    def _create_oned_tab(self, notebook: ttk.Notebook) -> None:
         """Create 1D settings tab."""
         tab = tk.Frame(notebook, bg=OPERAXNTheme.COLORS['bg_secondary'])
         notebook.add(tab, text="1D Settings")
@@ -608,7 +642,7 @@ class PlotSettingsDialog(BaseDialog):
             self.x_frame_label.config(text="X-Axis Range (d-spacing [Å])")
             self._convert_xaxis_to_dspacing()
 
-    def _on_dspacing_toggle(self):
+    def _on_dspacing_toggle(self) -> None:
         """Handle d-spacing toggle."""
         new_dspacing = self.dspacing_var.get()
 
@@ -622,14 +656,18 @@ class PlotSettingsDialog(BaseDialog):
 
         self._apply_settings()
 
-    def _convert_xaxis_to_dspacing(self):
-        """Convert X-axis values from 2θ to d-spacing."""
-        wavelength = (SYNCHROTRON_WAVELENGTH
-                      if hasattr(self.config, 'data_source') and
-                      self.config.data_source == DataSourceType.SYNCHROTRON
-                      else XRAY_WAVELENGTH)
+    def _get_wavelength(self) -> float:
+        """Return the X-ray wavelength for the current data source."""
+        if (hasattr(self.config, 'data_source') and
+                self.config.data_source == DataSourceType.SYNCHROTRON):
+            return SYNCHROTRON_WAVELENGTH
+        return XRAY_WAVELENGTH
 
-        for var, var_name in [(self.xmin_var, 'xmin'), (self.xmax_var, 'xmax')]:
+    def _convert_xaxis_to_dspacing(self) -> None:
+        """Convert X-axis entry values from 2-theta to d-spacing."""
+        wavelength = self._get_wavelength()
+
+        for var, _ in [(self.xmin_var, 'xmin'), (self.xmax_var, 'xmax')]:
             value_str = var.get().strip()
             if value_str:
                 try:
@@ -643,17 +681,15 @@ class PlotSettingsDialog(BaseDialog):
                             var.set("")
                     else:
                         var.set("")
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logging.getLogger(__name__).debug(
+                        "Could not convert 2θ to d-spacing: %s", e)
 
-    def _convert_xaxis_to_twotheta(self):
-        """Convert X-axis values from d-spacing to 2θ."""
-        wavelength = (SYNCHROTRON_WAVELENGTH
-                      if hasattr(self.config, 'data_source') and
-                      self.config.data_source == DataSourceType.SYNCHROTRON
-                      else XRAY_WAVELENGTH)
+    def _convert_xaxis_to_twotheta(self) -> None:
+        """Convert X-axis entry values from d-spacing to 2-theta."""
+        wavelength = self._get_wavelength()
 
-        for var, var_name in [(self.xmin_var, 'xmin'), (self.xmax_var, 'xmax')]:
+        for var, _ in [(self.xmin_var, 'xmin'), (self.xmax_var, 'xmax')]:
             value_str = var.get().strip()
             if value_str:
                 try:
@@ -665,11 +701,12 @@ class PlotSettingsDialog(BaseDialog):
                         var.set(f"{two_theta:.2f}")
                     else:
                         var.set("")
-                except (ValueError, TypeError, ZeroDivisionError):
-                    pass
+                except (ValueError, TypeError, ZeroDivisionError) as e:
+                    logging.getLogger(__name__).debug(
+                        "Could not convert d-spacing to 2θ: %s", e)
 
-    def _apply_settings(self):
-        """Apply all settings."""
+    def _apply_settings(self) -> None:
+        """Apply all settings and refresh plots."""
         try:
             # Store old d-spacing setting
             old_dspacing = self.config.show_dspacing if hasattr(self, 'dspacing_var') else False
@@ -698,7 +735,6 @@ class PlotSettingsDialog(BaseDialog):
 
             # Clear cache if d-spacing changed
             if old_dspacing != getattr(self.config, 'show_dspacing', False):
-                from .output import clear_plot_cache
                 clear_plot_cache()
 
                 if hasattr(self.main_app, '_update_plots'):
@@ -711,7 +747,7 @@ class PlotSettingsDialog(BaseDialog):
         except ValueError as e:
             messagebox.showerror("Invalid Input", str(e), parent=self)
 
-    def _create_twod_tab(self, notebook: ttk.Notebook):
+    def _create_twod_tab(self, notebook: ttk.Notebook) -> None:
         """Create 2D settings tab."""
         tab = tk.Frame(notebook, bg=OPERAXNTheme.COLORS['bg_secondary'])
         notebook.add(tab, text="2D Settings")
@@ -741,9 +777,9 @@ class PlotSettingsDialog(BaseDialog):
 # ============================================================================
 
 class ExportOptionsDialog(BaseDialog):
-    """Dialog for export options."""
+    """Export type and format selection dialog."""
 
-    def __init__(self, master, is_neutron: bool = False):
+    def __init__(self, master: tk.Misc, is_neutron: bool = False) -> None:
         self.is_neutron = is_neutron
         if is_neutron:
             window_size = WINDOW_SIZES['export_neutron']
@@ -752,8 +788,8 @@ class ExportOptionsDialog(BaseDialog):
         super().__init__(master, "Export Options", window_size)
         self._create_widgets()
 
-    def _create_widgets(self):
-        """Create export options widgets."""
+    def _create_widgets(self) -> None:
+        """Build export options widgets."""
         # Export type
         self.create_themed_label(text="Select export type:", font_type="heading", pady=10)
 
@@ -825,19 +861,19 @@ class ExportOptionsDialog(BaseDialog):
             ("Cancel", self.cancel, "secondary")
         ])
 
-    def _do_export(self):
-        """Validate and set export options."""
+    def _do_export(self) -> None:
+        """Validate selections and set export result."""
         if not any(var.get() for var in self.plot_vars.values()) and not self.is_neutron:
             messagebox.showwarning("No Selection",
                                    "Please select at least one plot type to export",
                                    parent=self)
             return
 
-        self.result = {
-            "export_type": self.export_var.get(),
-            "dpi": self.dpi_var.get(),
-            "plot_types": {k: v.get() for k, v in self.plot_vars.items()}
-        }
+        self.result = ExportOptions(
+            export_type=self.export_var.get(),
+            dpi=self.dpi_var.get(),
+            plot_types={k: v.get() for k, v in self.plot_vars.items()},
+        )
         self.destroy()
 
 
@@ -846,15 +882,15 @@ class ExportOptionsDialog(BaseDialog):
 # ============================================================================
 
 class GIFSettingsDialog(BaseDialog):
-    """Dialog for GIF creation settings."""
+    """GIF creation settings dialog."""
 
-    def __init__(self, master, num_scans: int):
+    def __init__(self, master: tk.Misc, num_scans: int) -> None:
         super().__init__(master, "Create GIF", WINDOW_SIZES['gif'])
         self.num_scans = num_scans
         self._create_widgets()
 
-    def _create_widgets(self):
-        """Create GIF settings widgets."""
+    def _create_widgets(self) -> None:
+        """Build GIF settings widgets."""
         # Scan range
         range_frame = self.create_themed_labelframe(self, "Scan Range:")
         range_frame.pack(fill="x", padx=20, pady=10)
@@ -907,8 +943,8 @@ class GIFSettingsDialog(BaseDialog):
             ("Cancel", self.cancel, "secondary")
         ])
 
-    def _create(self):
-        """Create GIF with settings."""
+    def _create(self) -> None:
+        """Validate and set GIF creation result."""
         scan_list = self._parse_scan_range(self.range_var.get())
         if not scan_list:
             messagebox.showwarning("Invalid Range",
@@ -916,12 +952,12 @@ class GIFSettingsDialog(BaseDialog):
                                    parent=self)
             return
 
-        self.result = {
-            "fps": self.fps_var.get(),
-            "dpi": self.dpi_var.get(),
-            "loop": self.loop_var.get(),
-            "scan_list": scan_list
-        }
+        self.result = GIFSettings(
+            fps=self.fps_var.get(),
+            dpi=self.dpi_var.get(),
+            loop=self.loop_var.get(),
+            scan_list=scan_list,
+        )
         self.destroy()
 
     def _parse_scan_range(self, scan_range: str) -> List[int]:
@@ -944,19 +980,79 @@ class GIFSettingsDialog(BaseDialog):
 
 
 # ============================================================================
+# Display Size Dialog
+# ============================================================================
+
+class DisplaySizeDialog(BaseDialog):
+    """Max display size selection for synchrotron 2D data downsampling."""
+
+    DISPLAY_OPTIONS = ["No downsampling", "4096", "2048", "1024", "512"]
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, "2D Display Size", "350x175")
+        self._create_widgets()
+
+    def _create_widgets(self) -> None:
+        """Build display size selection widgets."""
+        self.create_themed_label(
+            text="Max 2D image display size:",
+            font_type="heading",
+            pady=(20, 5)
+        )
+
+        self.create_themed_label(
+            text="Larger images will be stride-downsampled to this size.",
+            font_type="small",
+            fg_color=OPERAXNTheme.COLORS['text_secondary'],
+            pady=(0, 10)
+        )
+
+        # Combobox
+        combo_frame = tk.Frame(self, bg=OPERAXNTheme.COLORS['bg_primary'])
+        combo_frame.pack(pady=5)
+
+        self.size_var = tk.StringVar(value="4096")
+        style = ttk.Style()
+        style.configure("Display.TCombobox", padding=5)
+        self.combo = ttk.Combobox(
+            combo_frame,
+            textvariable=self.size_var,
+            values=self.DISPLAY_OPTIONS,
+            state="readonly",
+            width=20
+        )
+        self.combo.pack()
+
+        # Buttons
+        self.create_button_frame([
+            ("OK", self._confirm, "primary"),
+            ("Cancel", self.cancel, "secondary")
+        ], pady=15)
+
+    def _confirm(self) -> None:
+        """Parse selection and set result as int (0 = no downsampling)."""
+        val = self.size_var.get()
+        if val == "No downsampling":
+            self.result = 0
+        else:
+            self.result = int(val)
+        self.destroy()
+
+
+# ============================================================================
 # Progress Dialog
 # ============================================================================
 
 class ProgressDialog(BaseDialog):
-    """Progress dialog for long operations."""
+    """Progress bar dialog for long-running operations."""
 
-    def __init__(self, master, title: str, maximum: int):
+    def __init__(self, master: tk.Misc, title: str, maximum: int) -> None:
         super().__init__(master, title, WINDOW_SIZES['progress'])
         self.maximum = maximum
         self._create_widgets()
 
-    def _create_widgets(self):
-        """Create progress widgets."""
+    def _create_widgets(self) -> None:
+        """Build progress bar and label."""
         self.label = self.create_themed_label(
             text="Processing...",
             font_type="body",

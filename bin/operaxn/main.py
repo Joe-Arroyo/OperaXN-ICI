@@ -51,7 +51,7 @@ OPTIONAL_DEPENDENCIES = {
 # ============================================================================
 
 def setup_logging(debug: bool = False) -> logging.Logger:
-    """Setup logging configuration."""
+    """Configure and return the application logger."""
     level = logging.DEBUG if (debug or DEBUG_MODE) else logging.INFO
 
     # Configure root logger
@@ -87,7 +87,7 @@ def setup_logging(debug: bool = False) -> logging.Logger:
 
 
 def check_dependencies() -> Tuple[List[str], List[str]]:
-    """Check if all required dependencies are installed."""
+    """Return (missing_required, missing_optional) dependency names."""
     missing_required = []
     missing_optional = []
 
@@ -107,7 +107,7 @@ def check_dependencies() -> Tuple[List[str], List[str]]:
 
 
 def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-    """Convert hex color to RGB tuple."""
+    """Convert hex colour string to (R, G, B) tuple."""
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
@@ -117,11 +117,11 @@ def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
 # ============================================================================
 
 class WindowManager:
-    """Base class for window management with common utilities."""
+    """Shared window positioning and configuration utilities."""
 
     @staticmethod
-    def center_window(window: tk.Toplevel, width: int = None, height: int = None) -> None:
-        """Center a window on the screen."""
+    def center_window(window: tk.Misc, width: Optional[int] = None, height: Optional[int] = None) -> None:
+        """Centre a window on the screen."""
         window.update_idletasks()
 
         # Get dimensions
@@ -139,10 +139,10 @@ class WindowManager:
         window.geometry(f"{w}x{h}+{x}+{y}" if width else f"+{x}+{y}")
 
     @staticmethod
-    def configure_window(window: tk.Toplevel, title: str = None,
-                         topmost: bool = False, alpha: float = None,
+    def configure_window(window: tk.Misc, title: Optional[str] = None,
+                         topmost: bool = False, alpha: Optional[float] = None,
                          decorations: bool = True) -> None:
-        """Apply common window configurations."""
+        """Apply title, topmost, alpha, and decoration settings to a window."""
         if title:
             window.title(title)
 
@@ -164,9 +164,9 @@ class WindowManager:
 # ============================================================================
 
 class EnhancedSplashScreen(WindowManager):
-    """Modern animated splash screen for OperaXN application."""
+    """Animated splash screen shown during application startup."""
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk) -> None:
         """Initialise splash screen."""
         self.root = root
         self.width = SPLASH_WIDTH
@@ -185,7 +185,7 @@ class EnhancedSplashScreen(WindowManager):
         self.ui_elements = {}
 
     def show(self) -> tk.Toplevel:
-        """Display the splash screen."""
+        """Create, display, and return the splash Toplevel window."""
         self.splash = tk.Toplevel(self.root)
 
         # Configure window
@@ -210,7 +210,7 @@ class EnhancedSplashScreen(WindowManager):
         return self.splash
 
     def _create_content(self) -> None:
-        """Create splash screen content."""
+        """Build all splash screen visual elements on the canvas."""
         # Main container
         main_frame = tk.Frame(self.splash, bg=OPERAXNTheme.COLORS['bg_primary'])
         main_frame.pack(fill='both', expand=True)
@@ -234,7 +234,7 @@ class EnhancedSplashScreen(WindowManager):
         self._create_diffraction_rings()
 
     def _draw_gradient_background(self) -> None:
-        """Draw gradient background."""
+        """Draw vertical gradient from primary to secondary background colour."""
         bg_rgb = hex_to_rgb(OPERAXNTheme.COLORS['bg_primary'])
         bg_light_rgb = hex_to_rgb(OPERAXNTheme.COLORS['bg_secondary'])
 
@@ -248,7 +248,7 @@ class EnhancedSplashScreen(WindowManager):
             self.canvas.create_line(0, i, self.width, i, fill=color, width=1)
 
     def _create_logo_section(self) -> None:
-        """Create logo/icon section."""
+        """Draw hexagonal logo with rotating inner element."""
         center_x = self.width // 2
         center_y = 80
 
@@ -284,7 +284,7 @@ class EnhancedSplashScreen(WindowManager):
         )
 
     def _create_title_section(self) -> None:
-        """Create title and version section."""
+        """Draw title, subtitle, version badge, and copyright text."""
         center_x = self.width // 2
 
         # Title font
@@ -296,22 +296,22 @@ class EnhancedSplashScreen(WindowManager):
         opera_text = "OPERA"
         xn_text = "XN"
 
-        # Calculate positioning
-        temp = self.canvas.create_text(0, 0, text=APP_NAME, font=title_font)
-        bbox = self.canvas.bbox(temp)
-        full_width = (bbox[2] - bbox[0]) if bbox else 200
-        self.canvas.delete(temp)
-
+        # Measure each part so placement is font-independent
         temp = self.canvas.create_text(0, 0, text=opera_text, font=title_font)
-        bbox = self.canvas.bbox(temp)
-        opera_width = (bbox[2] - bbox[0]) if bbox else 120
+        opera_width = (self.canvas.bbox(temp)[2] - self.canvas.bbox(temp)[0]) if self.canvas.bbox(temp) else 120
         self.canvas.delete(temp)
 
-        # Create title parts
-        start_x = center_x - full_width // 2 + opera_width // 2
+        temp = self.canvas.create_text(0, 0, text=xn_text, font=title_font)
+        xn_width = (self.canvas.bbox(temp)[2] - self.canvas.bbox(temp)[0]) if self.canvas.bbox(temp) else 60
+        self.canvas.delete(temp)
+
+        gap = 4
+        total_width = opera_width + gap + xn_width
+        opera_x = center_x - total_width // 2 + opera_width // 2
+        xn_x = center_x + total_width // 2 - xn_width // 2
 
         self.canvas.create_text(
-            start_x, 150,
+            opera_x, 150,
             text=opera_text,
             font=title_font,
             fill=OPERAXNTheme.COLORS['text_primary'],
@@ -319,7 +319,7 @@ class EnhancedSplashScreen(WindowManager):
         )
 
         self.canvas.create_text(
-            start_x + opera_width // 2 + 35, 150,
+            xn_x, 150,
             text=xn_text,
             font=title_font,
             fill=OPERAXNTheme.COLORS['danger'],
@@ -348,8 +348,8 @@ class EnhancedSplashScreen(WindowManager):
                 anchor='center'
             )
 
-    def _create_version_badge(self, center_x: int, y_top: int, y_text: int, font: tuple) -> None:
-        """Create version badge."""
+    def _create_version_badge(self, center_x: int, y_top: int, y_text: int, font: Tuple) -> None:
+        """Draw bordered version label at the given position."""
         self.canvas.create_rectangle(
             center_x - 40, y_top,
             center_x + 40, y_top + 20,
@@ -367,7 +367,7 @@ class EnhancedSplashScreen(WindowManager):
         )
 
     def _create_progress_section(self) -> None:
-        """Create progress bar and status text."""
+        """Draw progress bar, status label, and loading dots."""
         center_x = self.width // 2
         bar_width = 300
         bar_height = 4
@@ -422,7 +422,7 @@ class EnhancedSplashScreen(WindowManager):
         self.ui_elements['bar_center_x'] = center_x
 
     def _create_decorative_corners(self) -> None:
-        """Create decorative corner elements."""
+        """Draw accent-coloured corner brackets."""
         corners = [
             # Top-left
             [(10, 10, 40, 10), (10, 10, 10, 40)],
@@ -446,7 +446,7 @@ class EnhancedSplashScreen(WindowManager):
                 )
 
     def _create_diffraction_rings(self) -> None:
-        """Create animated diffraction pattern rings."""
+        """Create hidden diffraction ring ovals for later animation."""
         center_x = self.width // 2
         center_y = self.height // 2 - 30
 
@@ -462,7 +462,7 @@ class EnhancedSplashScreen(WindowManager):
             self.animation_items.append(('ring', ring, i))
 
     def _start_animations(self) -> None:
-        """Start all animations."""
+        """Schedule all splash animation callbacks."""
         self.animation_running = True
 
         # Define animation schedules
@@ -477,12 +477,12 @@ class EnhancedSplashScreen(WindowManager):
             self._schedule_animation(delay, callback)
 
     def _schedule_animation(self, delay: int, callback: Callable) -> None:
-        """Schedule an animation with proper cleanup."""
+        """Queue a callback on the splash window if still alive."""
         if self.animation_running and self.splash and self.splash.winfo_exists():
             self.splash.after(delay, callback)
 
     def _animate_progress(self) -> None:
-        """Animate progress bar."""
+        """Advance the progress bar fill by one step."""
         if not self.animation_running or not self.splash.winfo_exists():
             return
 
@@ -514,7 +514,7 @@ class EnhancedSplashScreen(WindowManager):
         self._schedule_animation(30, self._animate_progress)
 
     def _animate_loading_dots(self) -> None:
-        """Animate loading dots."""
+        """Cycle the loading-dot indicator text."""
         if not self.animation_running or not self.splash.winfo_exists():
             return
 
@@ -525,7 +525,7 @@ class EnhancedSplashScreen(WindowManager):
         self._schedule_animation(500, self._animate_loading_dots)
 
     def _animate_rings(self) -> None:
-        """Animate diffraction rings."""
+        """Flash diffraction ring ovals in sequence."""
         if not self.animation_running or not self.splash.winfo_exists():
             return
 
@@ -543,7 +543,7 @@ class EnhancedSplashScreen(WindowManager):
         self._schedule_animation(2000, self._animate_rings)
 
     def _animate_rotation(self) -> None:
-        """Animate rotating elements."""
+        """Rotate the inner hexagon by one angular step."""
         if not self.animation_running or not self.splash.winfo_exists():
             return
 
@@ -568,14 +568,14 @@ class EnhancedSplashScreen(WindowManager):
         self._schedule_animation(50, self._animate_rotation)
 
     def update_status(self, message: str, progress: Optional[float] = None) -> None:
-        """Update status message and progress."""
+        """Set the status label text and optionally the progress value."""
         if self.splash and self.splash.winfo_exists():
             self.canvas.itemconfig(self.ui_elements['status_label'], text=message)
             if progress is not None:
                 self.progress_var.set(progress)
 
     def close(self) -> None:
-        """Close splash screen with fade effect."""
+        """Fade out and destroy the splash window."""
         self.animation_running = False
         if self.splash and self.splash.winfo_exists():
             # Fade out effect
@@ -595,9 +595,9 @@ class EnhancedSplashScreen(WindowManager):
 # ============================================================================
 
 class ApplicationManager:
-    """Manages the main application lifecycle."""
+    """Orchestrates startup, splash, and main-window lifecycle."""
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace) -> None:
         """Initialise application manager."""
         self.args = args
         self.logger = setup_logging(args.debug or DEBUG_MODE)
@@ -607,7 +607,7 @@ class ApplicationManager:
         self.initialization_complete = False
 
     def run(self) -> int:
-        """Run the application."""
+        """Launch the GUI event loop; return 0 on success, 1 on error."""
         try:
             # Validate environment
             if not self._validate_environment():
@@ -633,7 +633,7 @@ class ApplicationManager:
             return 1
 
     def _validate_environment(self) -> bool:
-        """Validate runtime environment."""
+        """Check required dependencies; return False if any are missing."""
         missing_required, missing_optional = check_dependencies()
 
         if missing_required:
@@ -651,7 +651,7 @@ class ApplicationManager:
         return True
 
     def _initialise_ui(self) -> None:
-        """Initialise UI components."""
+        """Create the root Tk window and show the splash screen."""
         # Create root window
         self.root = tk.Tk()
         self.root.withdraw()  # Hide initially
@@ -667,7 +667,7 @@ class ApplicationManager:
         self._show_splash()
 
     def _show_splash(self) -> None:
-        """Show splash screen with status updates."""
+        """Display the splash screen and schedule progress status updates."""
         self.splash_manager = EnhancedSplashScreen(self.root)
         self.splash_manager.show()
 
@@ -685,7 +685,7 @@ class ApplicationManager:
                             self.splash_manager.update_status(m, p))
 
     def _initialise_application(self) -> None:
-        """Initialise main application."""
+        """Create the OPERAXN GUI instance."""
         if self.initialization_complete:
             return
 
@@ -704,7 +704,7 @@ class ApplicationManager:
             raise
 
     def _show_main_window(self) -> None:
-        """Show main application window."""
+        """Close the splash and reveal the main application window."""
         if not self.initialization_complete:
             self._initialise_application()
 
@@ -718,7 +718,7 @@ class ApplicationManager:
         self.root.focus_force()
 
     def _set_window_icon(self) -> None:
-        """Set application icon if available."""
+        """Load and apply the window icon if the asset exists."""
         try:
             icon_path = Path(__file__).parent / 'assets' / 'icon.png'
             if icon_path.exists():
@@ -728,7 +728,7 @@ class ApplicationManager:
             pass  # Icon optional
 
     def _on_closing(self) -> None:
-        """Handle application closing."""
+        """Clear caches and destroy the root window."""
         try:
             if self.app:
                 # Clear caches
@@ -736,14 +736,14 @@ class ApplicationManager:
                 from .input import clear_global_cache
                 clear_plot_cache()
                 clear_global_cache()
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug("Error clearing caches on close: %s", e)
 
         self.root.quit()
         self.root.destroy()
 
     def _show_error(self, message: str) -> None:
-        """Show error dialog."""
+        """Display a fatal-error messagebox, falling back to stderr."""
         try:
             if not self.root:
                 self.root = tk.Tk()
@@ -758,7 +758,7 @@ class ApplicationManager:
 # ============================================================================
 
 def display_dependency_check() -> int:
-    """Display dependency check results."""
+    """Print dependency status to stdout; return 1 if required deps are missing."""
     missing_required, missing_optional = check_dependencies()
 
     print("\n" + "=" * 60)
@@ -791,7 +791,7 @@ def display_dependency_check() -> int:
 # ============================================================================
 
 def create_parser() -> argparse.ArgumentParser:
-    """Create command line argument parser."""
+    """Build and return the CLI argument parser."""
 
     parser = argparse.ArgumentParser(
         description=f'{APP_NAME} - OPERAndo X-ray and Neutron data visualisation tool',
@@ -830,7 +830,7 @@ Examples:
 # ============================================================================
 
 def main(args: Optional[List[str]] = None) -> int:
-    """Main entry point for OperaXN application."""
+    """Parse CLI arguments and launch OperaXN; return exit code."""
     parser = create_parser()
     parsed_args = parser.parse_args(args)
 
