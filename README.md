@@ -22,11 +22,17 @@
   
 ## Installation
 
+### macOS prerequisite
+
+The system Python bundled with macOS does not include a compatible version of Tcl/Tk and the GUI will not render. Before installing, download and install Python from **[python.org](https://www.python.org/downloads/)** (3.11 or later). The official installer bundles Tcl/Tk 8.6+, which is required.
+
 ### From source
 
 ```bash
 git clone https://github.com/matthewarlopowell/OperaXN.git
 cd OperaXN
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
 ```
 

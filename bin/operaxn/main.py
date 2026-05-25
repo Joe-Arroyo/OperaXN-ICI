@@ -5,6 +5,8 @@ OperaXN
 import argparse
 import logging
 import math
+import os
+import subprocess
 import sys
 import time
 import tkinter as tk
@@ -648,6 +650,16 @@ class ApplicationManager:
             self.logger.warning("Optional dependencies not installed: %s",
                                 ", ".join(missing_optional))
 
+        if sys.platform == 'darwin' and tk.TkVersion < 8.6:
+            self._show_error(
+                f"Tcl/Tk {tk.TkVersion} detected.\n\n"
+                "OperaXN requires Tcl/Tk 8.6 or newer on macOS. "
+                "The system Python does not include a compatible version.\n\n"
+                "Fix: install Python from https://www.python.org, "
+                "create a virtual environment with it, and reinstall OperaXN."
+            )
+            return False
+
         return True
 
     def _initialise_ui(self) -> None:
@@ -714,8 +726,22 @@ class ApplicationManager:
         # Position and show
         WindowManager.center_window(self.root)
         self.root.deiconify()
+        self.root.update()
         self.root.lift()
         self.root.focus_force()
+
+        # macOS: force the app to the foreground
+        if sys.platform == 'darwin':
+            try:
+                from AppKit import NSApplication
+                NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            except ImportError:
+                subprocess.Popen(
+                    ['osascript', '-e',
+                     'tell application "System Events" to set frontmost of '
+                     f'every process whose unix id is {os.getpid()} to true'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
 
     def _set_window_icon(self) -> None:
         """Load and apply the window icon if the asset exists."""
