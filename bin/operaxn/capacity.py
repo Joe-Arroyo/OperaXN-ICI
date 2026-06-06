@@ -153,7 +153,7 @@ def plot_capacity_vs_voltage(ax, echem_df, mass_mg=0.0, cycles_to_plot=None):
             cap = compute_capacity(discharge_df)
             if use_specific:
                 cap = cap / (mass_mg / 1000.0)
-            ax.plot(cap, discharge_df["echem_data"].values, color=color, linewidth=1.5, linestyle="--")
+            ax.plot(cap, discharge_df["echem_data"].values, color=color, linewidth=1.5)
     ax.legend(fontsize=7, loc="best")
 
 def plot_time_vs_voltage(ax, echem_df, cycles_to_plot=None):

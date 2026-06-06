@@ -1690,7 +1690,7 @@ class OPERAXN(tk.Frame):
                 _available = []
                 cycle_info = "0"
 
-            tk.Label(controls, text=f"Available: {cycle_info}",
+            tk.Label(controls, text=f"Available cycles: {cycle_info}",
                     bg=OPERAXNTheme.COLORS['bg_primary'],
                     fg=OPERAXNTheme.COLORS.get('text_secondary', '#aaaaaa'),
                     font=OPERAXNTheme.FONTS['button']).pack(side="left", padx=(0, 16))
