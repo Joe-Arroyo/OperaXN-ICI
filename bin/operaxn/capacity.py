@@ -103,23 +103,23 @@ def compute_capacity(df: pd.DataFrame) -> np.ndarray:
     capacity = np.cumsum(i_mid * dt) / 3600.0  # mAh
     return capacity
 
-def plot_capacity_vs_voltage(ax, echem_df, mass_mg=0.0):
+def plot_capacity_vs_voltage(ax, echem_df, mass_mg=0.0, cycles_to_plot=None):
     ax.clear()
     use_specific = mass_mg > 0
     ax.set_xlabel("Specific Capacity (mAh/g)" if use_specific else "Capacity (mAh)")
     ax.set_ylabel("Voltage (V)")
-    ax.set_title("Capacity vs Voltage")
     ax.grid(True, alpha=0.3)
     if echem_df is None or echem_df.empty:
         ax.text(0.5, 0.5, "No echem data loaded", ha="center", va="center", transform=ax.transAxes, color="grey", fontsize=11)
         return
     df = assign_cycles(echem_df)
-    cycles = sorted([c for c in df["cycle"].unique() if c > 0])
-    cmap = plt.cm.tab10 if len(cycles) <= 10 else plt.cm.viridis
-    colors = {c: cmap(i / max(len(cycles) - 1, 1)) for i, c in enumerate(cycles)}
+    all_cycles = sorted([c for c in df["cycle"].unique() if c > 0])
+    cycles = cycles_to_plot if cycles_to_plot is not None else all_cycles
+    cmap = plt.cm.tab10 if len(all_cycles) <= 10 else plt.cm.viridis
+    colors = {c: cmap(i / max(len(all_cycles) - 1, 1)) for i, c in enumerate(all_cycles)}
     for cycle_num in cycles:
         cycle_df = df[df["cycle"] == cycle_num]
-        color = colors[cycle_num]
+        color = colors.get(cycle_num, "grey")
         charge_df = cycle_df[cycle_df["phase"] == "charge"]
         if not charge_df.empty:
             cap = compute_capacity(charge_df)
@@ -134,28 +134,21 @@ def plot_capacity_vs_voltage(ax, echem_df, mass_mg=0.0):
             ax.plot(cap, discharge_df["echem_data"].values, color=color, linewidth=1.5, linestyle="--")
     ax.legend(fontsize=7, loc="best")
 
-def plot_time_vs_voltage(ax, echem_df: pd.DataFrame) -> None:
+def plot_time_vs_voltage(ax, echem_df, cycles_to_plot=None):
     ax.clear()
-    ax.set_xlabel("Time (s)")
+    ax.set_xlabel("Time (h)")
     ax.set_ylabel("Voltage (V)")
-    ax.set_title("Voltage vs Time")
     ax.grid(True, alpha=0.3)
-
     if echem_df is None or echem_df.empty:
-        ax.text(0.5, 0.5, "No echem data loaded",
-                ha="center", va="center", transform=ax.transAxes,
-                color="grey", fontsize=11)
+        ax.text(0.5, 0.5, "No echem data loaded", ha="center", va="center", transform=ax.transAxes, color="grey", fontsize=11)
         return
-
     df = assign_cycles(echem_df)
-    cycles = sorted([c for c in df["cycle"].unique() if c > 0])
-
-    cmap = plt.cm.tab10 if len(cycles) <= 10 else plt.cm.viridis
-    colors = {c: cmap(i / max(len(cycles) - 1, 1)) for i, c in enumerate(cycles)}
-
+    all_cycles = sorted([c for c in df["cycle"].unique() if c > 0])
+    cycles = cycles_to_plot if cycles_to_plot is not None else all_cycles
+    cmap = plt.cm.tab10 if len(all_cycles) <= 10 else plt.cm.viridis
+    colors = {c: cmap(i / max(len(all_cycles) - 1, 1)) for i, c in enumerate(all_cycles)}
     for cycle_num in cycles:
         cycle_df = df[df["cycle"] == cycle_num]
-        ax.plot(cycle_df["t_s"].values, cycle_df["echem_data"].values,
-                color=colors[cycle_num], linewidth=1.5, label=f"Cycle {cycle_num}")
-
+        ax.plot(cycle_df["t_s"].values / 3600.0, cycle_df["echem_data"].values,
+                color=colors.get(cycle_num, "grey"), linewidth=1.5, label=f"Cycle {cycle_num}")
     ax.legend(fontsize=7, loc="best")

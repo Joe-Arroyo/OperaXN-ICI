@@ -1653,6 +1653,7 @@ class OPERAXN(tk.Frame):
     
     def _open_capacity_window(self) -> None:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from tkinter import filedialog
         from .capacity import plot_capacity_vs_voltage, plot_time_vs_voltage
 
         win = tk.Toplevel(self)
@@ -1662,41 +1663,71 @@ class OPERAXN(tk.Frame):
         win.lift()
         win.focus_force()
 
-        # --- mass input bar ---
+        # --- controls bar ---
         controls = tk.Frame(win, bg=OPERAXNTheme.COLORS['bg_primary'])
         controls.pack(side="top", fill="x", padx=8, pady=(8, 0))
 
-        tk.Label(controls, text="Sample mass (mg):", bg=OPERAXNTheme.COLORS['bg_primary'],
-                fg=OPERAXNTheme.COLORS.get('text_primary', 'white')).pack(side="left")
+        tk.Label(controls, text="Sample mass (mg):",
+                bg=OPERAXNTheme.COLORS['bg_primary'],
+                fg=OPERAXNTheme.COLORS['text_primary'],
+                font=OPERAXNTheme.FONTS['button']).pack(side="left")
         mass_var = tk.StringVar(value="0")
-        mass_entry = tk.Entry(controls, textvariable=mass_var, width=10)
-        mass_entry.pack(side="left", padx=(4, 12))
+        mass_entry = tk.Entry(controls, textvariable=mass_var, width=8)
+        mass_entry.pack(side="left", padx=(4, 8))
 
-        # --- figure ---
-        try:
-            fig, (ax_time, ax_cap) = plt.subplots(1, 2, figsize=(12, 5), facecolor="white")
-            plot_time_vs_voltage(ax_time, self.state.echem_df)
-            plot_capacity_vs_voltage(ax_cap, self.state.echem_df, mass_mg=0.0)
-            fig.tight_layout()
+        StyledButton(controls, text="Apply", command=lambda: _replot(),
+                    style="primary").pack(side="left", padx=(0, 16))
 
-            canvas = FigureCanvasTkAgg(fig, master=win)
-            canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
-            canvas.draw()
-        except Exception as e:
-            import traceback
-            tk.Label(win, text=f"Error: {e}\n{traceback.format_exc()}",
-                        bg="white", fg="red", justify="left", wraplength=1100).pack(padx=8, pady=8)
+        StyledButton(controls, text="💾 Voltage vs Time",
+                    command=lambda: _export(fig_time, "voltage_vs_time"),
+                    style="secondary").pack(side="left", padx=(0, 4))
+
+        StyledButton(controls, text="💾 Capacity vs Voltage",
+                    command=lambda: _export(fig_cap, "capacity_vs_voltage"),
+                    style="secondary").pack(side="left", padx=(0, 4))
+
+        # --- figures ---
+        plot_frame = tk.Frame(win, bg="white")
+        plot_frame.pack(fill="both", expand=True, padx=8, pady=8)
+
+        fig_time, ax_time = plt.subplots(1, 1, figsize=(6, 5), facecolor="white")
+        fig_cap, ax_cap = plt.subplots(1, 1, figsize=(6, 5), facecolor="white")
+
+        plot_time_vs_voltage(ax_time, self.state.echem_df)
+        plot_capacity_vs_voltage(ax_cap, self.state.echem_df, mass_mg=0.0)
+        fig_time.tight_layout()
+        fig_cap.tight_layout()
+
+        canvas_time = FigureCanvasTkAgg(fig_time, master=plot_frame)
+        canvas_time.get_tk_widget().pack(side="left", fill="both", expand=True)
+        canvas_time.draw()
+
+        canvas_cap = FigureCanvasTkAgg(fig_cap, master=plot_frame)
+        canvas_cap.get_tk_widget().pack(side="left", fill="both", expand=True)
+        canvas_cap.draw()
 
         def _replot(*_):
             try:
                 mass = float(mass_var.get())
             except ValueError:
                 mass = 0.0
+            plot_time_vs_voltage(ax_time, self.state.echem_df)
             plot_capacity_vs_voltage(ax_cap, self.state.echem_df, mass_mg=mass)
-            fig.tight_layout()
-            canvas.draw()
+            fig_time.tight_layout()
+            fig_cap.tight_layout()
+            canvas_time.draw()
+            canvas_cap.draw()
 
-        tk.Button(controls, text="Apply", command=_replot).pack(side="left")
+        def _export(fig, default_name):
+            path = filedialog.asksaveasfilename(
+                parent=win,
+                defaultextension=".png",
+                filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
+                initialfile=f"{default_name}.png",
+            )
+            if path:
+                fig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+
         mass_entry.bind("<Return>", _replot)
 
     def _calculate_intensity_limits(self, image: np.ndarray) -> Tuple[float, float]:
