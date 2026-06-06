@@ -351,6 +351,7 @@ class ButtonPanel(BaseUIComponent):
         ("upload_files", "📁 Upload", "normal", "primary"),
         ("plot_data", "📊 Plot", "disabled", "primary"),
         ("export_plots", "💾 Export", "disabled", "secondary"),
+        ("capacity_plot", "📈 Capacity", "disabled", "secondary"), 
         ("create_gif", "🎬 GIF", "disabled", "secondary"),
         ("export_data", "📄 Excel", "disabled", "secondary"),
         ("clear_all", "🗑️ Clear", "normal", "danger"),
@@ -921,6 +922,7 @@ class OPERAXN(tk.Frame):
             "upload_files": self._upload_files,
             "plot_data": self._plot_data,
             "export_plots": self._export_data,
+            "capacity_plot": self._open_capacity_window,
             "create_gif": self._create_gif,
             "export_data": self._export_to_excel,
             "clear_all": self._clear_all
@@ -1389,7 +1391,8 @@ class OPERAXN(tk.Frame):
                 # Enable controls
                 self.button_panel.update_states({
                     "export_plots": "normal",
-                    "create_gif": "normal"
+                    "create_gif": "normal",
+                    "capacity_plot": "normal", 
                 })
 
         except Exception as e:
@@ -1647,6 +1650,54 @@ class OPERAXN(tk.Frame):
                 ha="center", va="center", transform=self.axes["echem"].transAxes,
                 color="grey", fontsize=10
             )
+    
+    def _open_capacity_window(self) -> None:
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from .capacity import plot_capacity_vs_voltage, plot_time_vs_voltage
+
+        win = tk.Toplevel(self)
+        win.title("Capacity Analysis")
+        win.configure(bg=OPERAXNTheme.COLORS['bg_primary'])
+        win.geometry("1200x560")
+        win.lift()
+        win.focus_force()
+
+        # --- mass input bar ---
+        controls = tk.Frame(win, bg=OPERAXNTheme.COLORS['bg_primary'])
+        controls.pack(side="top", fill="x", padx=8, pady=(8, 0))
+
+        tk.Label(controls, text="Sample mass (mg):", bg=OPERAXNTheme.COLORS['bg_primary'],
+                fg=OPERAXNTheme.COLORS.get('text_primary', 'white')).pack(side="left")
+        mass_var = tk.StringVar(value="0")
+        mass_entry = tk.Entry(controls, textvariable=mass_var, width=10)
+        mass_entry.pack(side="left", padx=(4, 12))
+
+        # --- figure ---
+        try:
+            fig, (ax_time, ax_cap) = plt.subplots(1, 2, figsize=(12, 5), facecolor="white")
+            plot_time_vs_voltage(ax_time, self.state.echem_df)
+            plot_capacity_vs_voltage(ax_cap, self.state.echem_df, mass_mg=0.0)
+            fig.tight_layout()
+
+            canvas = FigureCanvasTkAgg(fig, master=win)
+            canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+            canvas.draw()
+        except Exception as e:
+            import traceback
+            tk.Label(win, text=f"Error: {e}\n{traceback.format_exc()}",
+                        bg="white", fg="red", justify="left", wraplength=1100).pack(padx=8, pady=8)
+
+        def _replot(*_):
+            try:
+                mass = float(mass_var.get())
+            except ValueError:
+                mass = 0.0
+            plot_capacity_vs_voltage(ax_cap, self.state.echem_df, mass_mg=mass)
+            fig.tight_layout()
+            canvas.draw()
+
+        tk.Button(controls, text="Apply", command=_replot).pack(side="left")
+        mass_entry.bind("<Return>", _replot)
 
     def _calculate_intensity_limits(self, image: np.ndarray) -> Tuple[float, float]:
         """Calculate intensity limits for image."""
@@ -2311,6 +2362,7 @@ class OPERAXN(tk.Frame):
             "plot_data": "disabled",
             "export_plots": "disabled",
             "create_gif": "disabled",
+            "capacity_plot": "disabled", 
             "export_data": "disabled"
         })
 
