@@ -103,6 +103,28 @@ def compute_capacity(df: pd.DataFrame) -> np.ndarray:
     capacity = np.cumsum(i_mid * dt) / 3600.0  # mAh
     return capacity
 
+
+def parse_cycle_selection(input_str, available_cycles):
+    s = input_str.strip().lower()
+    if s in ("all", "0", ""):
+        return list(available_cycles)
+    selected = set()
+    for part in s.split(","):
+        part = part.strip()
+        if "-" in part:
+            try:
+                a, b = part.split("-", 1)
+                selected.update(range(int(a), int(b) + 1))
+            except ValueError:
+                pass
+        else:
+            try:
+                selected.add(int(part))
+            except ValueError:
+                pass
+    return sorted(c for c in selected if c in available_cycles)
+
+
 def plot_capacity_vs_voltage(ax, echem_df, mass_mg=0.0, cycles_to_plot=None):
     ax.clear()
     use_specific = mass_mg > 0
