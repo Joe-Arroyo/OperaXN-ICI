@@ -352,6 +352,7 @@ class ButtonPanel(BaseUIComponent):
         ("plot_data", "📊 Plot", "disabled", "primary"),
         ("export_plots", "💾 Export", "disabled", "secondary"),
         ("capacity_plot", "📈 Capacity", "disabled", "secondary"), 
+        ("ici_analysis",  "🔬 ICI",      "disabled", "secondary"),
         ("create_gif", "🎬 GIF", "disabled", "secondary"),
         ("export_data", "📄 Excel", "disabled", "secondary"),
         ("clear_all", "🗑️ Clear", "normal", "danger"),
@@ -923,6 +924,7 @@ class OPERAXN(tk.Frame):
             "plot_data": self._plot_data,
             "export_plots": self._export_data,
             "capacity_plot": self._open_capacity_window,
+            "ici_analysis":  self._on_ici_analysis, 
             "create_gif": self._create_gif,
             "export_data": self._export_to_excel,
             "clear_all": self._clear_all
@@ -1392,7 +1394,8 @@ class OPERAXN(tk.Frame):
                 self.button_panel.update_states({
                     "export_plots": "normal",
                     "create_gif": "normal",
-                    "capacity_plot": "normal", 
+                    "capacity_plot": "normal",
+                    "ici_analysis":  "normal",  
                 })
 
         except Exception as e:
@@ -1772,6 +1775,9 @@ class OPERAXN(tk.Frame):
         except Exception as e:
             messagebox.showerror("Capacity Window Error", traceback.format_exc(), parent=self.master)
 
+    def _on_ici_analysis(self) -> None:
+        from .ici import ICIWindow
+        ICIWindow(self.master, self.state.echem_df)
 
     def _calculate_intensity_limits(self, image: np.ndarray) -> Tuple[float, float]:
         """Calculate intensity limits for image."""
@@ -2436,7 +2442,8 @@ class OPERAXN(tk.Frame):
             "plot_data": "disabled",
             "export_plots": "disabled",
             "create_gif": "disabled",
-            "capacity_plot": "disabled", 
+            "capacity_plot": "disabled",
+            "ici_analysis":  "disabled", 
             "export_data": "disabled"
         })
 
