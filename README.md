@@ -41,8 +41,8 @@ The system Python bundled with macOS does not include a compatible version of Tc
 ### From source
 
 ```bash
-git clone https://github.com/matthewarlopowell/OperaXN.git
-cd OperaXN
+git clone https://github.com/joe-arroyo/operaxn-ici.git
+cd operaxn-ici
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
