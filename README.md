@@ -4,19 +4,7 @@
 
 **OperaXN** is a Python-based desktop application for correlating, visualising and analysing *operando* diffraction data collected by laboratory XRD, synchrotron XRD or neutron diffraction sources. It also includes **Nexus Generator**, a companion tool for generating standardised NeXus (`.nxs`) files from raw electrochemical and diffraction data to facilitate easy data sharing in machine-readable formats.
 
-This fork extends the original [OperaXN](https://github.com/matthewarlopowell/OperaXN) with additional electrochemical analysis tools:
-- Capacity Analysis
-- ICI Analysis (powered by [pyICI](https://github.com/joe-arroyo/pyICI))
-
 ## Features
-
-### Capacity Analysis
-OperaXN automatically classifies electrochemical data by current sign (positive = charge, negative = discharge, zero = rest) and detects cycles. Cumulative capacity is computed via trapezoidal integration of current over time and reset at the start of each half-cycle. Results can be normalised to specific capacity (mAh/g) by entering the sample mass. Plots can be filtered by cycle number and exported as PNG, PDF or SVG at 300 DPI.
-
-### ICI
-The ICI module implements pulse detection following the [pyICI](https://github.com/joe-arroyo/pyICI) algorithm: a pulse is defined as a non-zero current period followed by a rest period (current = 0), valid only if the rest duration is within a configurable limit (default 300 s). This naturally excludes CV steps and inter-cycle rests.
-
-For each pulse, a linear regression of ΔV vs √Δt is performed over a user-defined window (default: skip 2 pts, length 10 pts). From the slope and intercept, resistance R and kinetic coefficient k are extracted with error propagation from the covariance matrix. Results are displayed as R² vs Pulse and R/k vs Voltage plots for charge and discharge independently.
 
 ### OperaXN
 - Automated time-correlation of electrochemical (voltage and current) and diffraction datasets
