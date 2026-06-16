@@ -32,6 +32,7 @@ Usage (from gui.py):
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import filedialog, messagebox
 from typing import Optional
 
 import numpy as np
@@ -134,8 +135,10 @@ def _detect_pulses(phase_df: pd.DataFrame, max_rest: float = 1800.0) -> list[dic
 
     return pulses
 
-def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: int, r1_length: int) -> dict | None:
-    """ΔV vs √Δt linear fit for one pulse. Returns None if rest data is insufficient."""
+def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: float, r1_length: float) -> dict | None:
+    """ΔV vs √Δt linear fit for one pulse. r1_start/r1_length are a time window
+    (seconds) into the rest period: fit points with r1_start <= Δt < r1_start+r1_length.
+    Returns None if rest data is insufficient."""
     active = seg[pulse['pulse_mask']]
     rest   = seg[pulse['relax_mask']]
     if active.empty or rest.empty:
@@ -147,14 +150,15 @@ def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: int, r1_length: int) 
 
     delta_V = rest['echem_data'].values - V0
     t_rest0 = rest['t_s'].values[0]
-    sqrt_dt = np.sqrt(np.maximum(rest['t_s'].values - t_rest0, 0.0))
+    elapsed = rest['t_s'].values - t_rest0
+    sqrt_dt = np.sqrt(np.maximum(elapsed, 0.0))
 
-    end = r1_start + r1_length
-    if len(rest) < end:
+    win_mask = (elapsed >= r1_start) & (elapsed < r1_start + r1_length)
+    if win_mask.sum() < 2:
         return None
 
-    X = sqrt_dt[r1_start:end]
-    y = delta_V[r1_start:end]
+    X = sqrt_dt[win_mask]
+    y = delta_V[win_mask]
 
     X_mean, y_mean = np.mean(X), np.mean(y)
     dX = X - X_mean
@@ -188,10 +192,11 @@ def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: int, r1_length: int) 
     )
 
 
-def _compute_all_pulses(seg: pd.DataFrame, pulses: list[dict],
-                        r1_start: int, r1_length: int) -> list[dict]:
+def _compute_all_pulses(seg: pd.DataFrame, pulses: list[dict], get_r1) -> list[dict]:
+    """get_r1(pulse_idx) -> (r1_start_s, r1_length_s) for that pulse."""
     results = []
     for i, p in enumerate(pulses):
+        r1_start, r1_length = get_r1(i + 1)
         fit = _compute_fit(seg, p, r1_start, r1_length)
         if fit is not None:
             fit['pulse_idx'] = i + 1
@@ -393,23 +398,32 @@ class _SelectorStrip(tk.Frame):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _RegressionBar(tk.Frame):
-    def __init__(self, master, on_apply):
+    def __init__(self, master, on_apply, on_export):
         super().__init__(master, bg=BG2, pady=4)
-        self._on_apply = on_apply
+        self._on_apply  = on_apply
+        self._on_export = on_export
         self._build()
 
     def _build(self):
         _label(self, 'Regression window:').pack(side='left', padx=(_PAD_M, _PAD_S))
-        _label(self, 'Skip (pts):', dim=True).pack(side='left')
-        self.r1_start_var = tk.IntVar(value=2)
-        _spinbox(self, self.r1_start_var, from_=0, to=999,
-                 increment=1, width=5).pack(side='left', padx=(_PAD_S, _PAD_M))
-        _label(self, 'Length (pts):', dim=True).pack(side='left')
-        self.r1_length_var = tk.IntVar(value=10)
-        _spinbox(self, self.r1_length_var, from_=2, to=999,
-                 increment=1, width=5).pack(side='left', padx=(_PAD_S, _PAD_M))
-        _Btn(self, 'Apply', style='primary',
-             command=self._on_apply).pack(side='left', padx=_PAD_S)
+        _label(self, 'Start (s):', dim=True).pack(side='left')
+        self.start_var = tk.DoubleVar(value=0.5)
+        _spinbox(self, self.start_var, from_=0.0, to=9999.0,
+                 increment=0.1, format='%.2f', width=6).pack(side='left', padx=(_PAD_S, _PAD_M))
+        _label(self, 'Length (s):', dim=True).pack(side='left')
+        self.length_var = tk.DoubleVar(value=1.0)
+        _spinbox(self, self.length_var, from_=0.1, to=9999.0,
+                 increment=0.1, format='%.2f', width=6).pack(side='left', padx=(_PAD_S, _PAD_M))
+        _Btn(self, 'Apply (this pulse)', style='primary',
+             command=lambda: self._on_apply('pulse')).pack(side='left', padx=_PAD_S)
+        _Btn(self, 'Apply (all pulses)', style='secondary',
+             command=lambda: self._on_apply('cycle')).pack(side='left', padx=_PAD_S)
+        _Btn(self, 'Apply (all cycles)', style='secondary',
+             command=lambda: self._on_apply('all')).pack(side='left', padx=_PAD_S)
+
+        _separator(self, horizontal=False).pack(side='left', fill='y', padx=_PAD_M, pady=3)
+        _Btn(self, '⬇ Export CSV', style='secondary',
+             command=self._on_export).pack(side='left', padx=_PAD_S)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -482,6 +496,11 @@ class ICIWindow(tk.Toplevel):
         self._updating = False
         self._last_cycle_phase: tuple = (None, None)
 
+        # Regression-window overrides, resolved pulse > cycle > phase > bar defaults
+        self._r1_pulse_overrides: dict = {}   # (cycle, phase, pulse_idx) -> (start_s, length_s)
+        self._r1_cycle_overrides: dict = {}   # (cycle, phase)            -> (start_s, length_s)
+        self._r1_phase_overrides: dict = {}   # phase                     -> (start_s, length_s)
+
         self._build_ui()
 
         if echem_df is not None and not echem_df.empty:
@@ -503,7 +522,8 @@ class ICIWindow(tk.Toplevel):
     def _build_ui(self):
         # ── Regression bar — packed from bottom first ──────────────────
         _separator(self).pack(fill='x', side='bottom')
-        self.reg_bar = _RegressionBar(self, on_apply=self._on_apply)
+        self.reg_bar = _RegressionBar(self, on_apply=self._on_apply,
+                                       on_export=self._export_csv)
         self.reg_bar.pack(fill='x', side='bottom')
 
         # ── Content area ───────────────────────────────────────────────
@@ -571,19 +591,19 @@ class ICIWindow(tk.Toplevel):
     def _build_bot_axes(self):
         gs = GridSpec(1, 2, figure=self._fig_bot,
                 wspace=0.35,
-                left=0.10, right=0.97,
+                left=0.10, right=0.90,
                 top=0.80, bottom=0.18)
         self.ax_dv = self._fig_bot.add_subplot(gs[0, 0])
         self.ax_r2 = self._fig_bot.add_subplot(gs[0, 1])
-        _style_ax(self.ax_dv, '√Δt (√s)', 'ΔV (V)', 'ICI fit')
+        _style_ax(self.ax_dv, '√Δt (s¹ᐟ²)', 'ΔV (V)', 'ICI fit')
         _style_ax(self.ax_r2, 'Pulse #',   'R²',     'R² vs Pulse')
         _stub(self.ax_dv); _stub(self.ax_r2)
 
     def _build_right_axes(self):
         gs = GridSpec(4, 1, figure=self._fig_right,
-                      hspace=0.55,
-                      left=0.20, right=0.95,
-                      top=0.97, bottom=0.05)
+                      hspace=0.40,
+                      left=0.14, right=0.97,
+                      top=0.98, bottom=0.04)
         self.ax_r_chg  = self._fig_right.add_subplot(gs[0])
         self.ax_r_dis  = self._fig_right.add_subplot(gs[1])
         self.ax_k_chg  = self._fig_right.add_subplot(gs[2])
@@ -723,21 +743,35 @@ class ICIWindow(tk.Toplevel):
         )
 
         # ── ICI analysis ───────────────────────────────────────────────────────────
-    def _get_r1(self):
-        return (int(self.reg_bar.r1_start_var.get()),
-                int(self.reg_bar.r1_length_var.get()))
+    def _get_r1(self, cycle: int = None, phase: str = None, pulse_idx: int = None):
+        """Resolve the regression window (start_s, length_s) for a pulse,
+        falling back pulse -> cycle -> phase -> the bar's current defaults."""
+        if cycle is not None and phase is not None and pulse_idx is not None:
+            ov = self._r1_pulse_overrides.get((cycle, phase, pulse_idx))
+            if ov is not None:
+                return ov
+        if cycle is not None and phase is not None:
+            ov = self._r1_cycle_overrides.get((cycle, phase))
+            if ov is not None:
+                return ov
+        if phase is not None:
+            ov = self._r1_phase_overrides.get(phase)
+            if ov is not None:
+                return ov
+        return (float(self.reg_bar.start_var.get()),
+                float(self.reg_bar.length_var.get()))
 
     def _compute_ici(self, cycle: int, phase: str) -> list[dict]:
-        r1s, r1l = self._get_r1()
-        key = (cycle, phase, r1s, r1l)
+        key = (cycle, phase)
         if key not in self._ici_cache:
             pulses = self._get_pulses(cycle, phase)
             if not pulses or self._df is None:
                 self._ici_cache[key] = []
             else:
                 mask = (self._df['cycle'] == cycle) & (self._df['phase'] == phase)
+                get_r1 = lambda idx: self._get_r1(cycle, phase, idx)
                 self._ici_cache[key] = _compute_all_pulses(
-                    self._df[mask], pulses, r1s, r1l)
+                    self._df[mask], pulses, get_r1)
         return self._ici_cache[key]
 
     # ── plot: ICI fit ──────────────────────────────────────────────────────────
@@ -757,11 +791,9 @@ class ICIWindow(tk.Toplevel):
         ax.scatter(fit['sqrt_dt'], fit['delta_V'],
                    color=col, s=12, alpha=0.7, zorder=3, label='ΔV')
 
-        r1s, r1l = self._get_r1()
-        end = r1s + r1l
-        if end <= len(fit['sqrt_dt']):
-            ax.axvspan(fit['sqrt_dt'][r1s], fit['sqrt_dt'][end - 1],
-                       alpha=0.12, color=ACCENT, zorder=1)
+        r1s, r1l = self._get_r1(cycle, phase, pulse_idx)
+        ax.axvspan(np.sqrt(r1s), np.sqrt(r1s + r1l),
+                   alpha=0.12, color=ACCENT, zorder=1)
 
         ax.plot(fit['X_fit'], fit['y_fit'],
                 color=ACCENT, lw=2, zorder=4,
@@ -791,7 +823,7 @@ class ICIWindow(tk.Toplevel):
 
         ax.set_title(
             f'ICI fit  |  C{cycle}  {phase[:3]}  |  Pulse {pulse_idx}  '
-            f'|  R={fit["R"]:.4f} Ω  k={fit["k"]:.4f} Ω√s',
+            f'|  R={fit["R"]:.4f} Ω  k={fit["k"]:.4f} Ω·s⁻¹ᐟ²',
             color=DIM, fontsize=9, pad=4)
 
     # ── plot: R² vs pulse ──────────────────────────────────────────────────────
@@ -803,26 +835,27 @@ class ICIWindow(tk.Toplevel):
         if self._df is None:
             _stub(ax, 'No data'); return
 
-        datasets: list[tuple[list, str, str]] = []
+        datasets: list[tuple[list, str, str, float]] = []
         if scope == 'phase':
             col = CHARGE_COLOR if phase == 'charge' else DISCHARGE_COLOR
-            datasets.append((self._compute_ici(cycle, phase), phase.capitalize(), col))
+            datasets.append((self._compute_ici(cycle, phase), phase.capitalize(), col, 0.85))
         elif scope == 'cycle':
-            datasets.append((self._compute_ici(cycle, 'charge'),    'Charge',    CHARGE_COLOR))
-            datasets.append((self._compute_ici(cycle, 'discharge'), 'Discharge', DISCHARGE_COLOR))
+            datasets.append((self._compute_ici(cycle, 'charge'),    'Charge',    CHARGE_COLOR,    0.85))
+            datasets.append((self._compute_ici(cycle, 'discharge'), 'Discharge', DISCHARGE_COLOR, 0.85))
         else:
             max_c = int(self._df[self._df['cycle'] > 0]['cycle'].max())
             for c in range(1, max_c + 1):
+                alpha = 1.0 if c == cycle else 0.35   # same shading rule as the R/k panels
                 for ph, col in (('charge', CHARGE_COLOR), ('discharge', DISCHARGE_COLOR)):
                     lbl = f'C{c} {ph[:3]}'
-                    datasets.append((self._compute_ici(c, ph), lbl, col))
+                    datasets.append((self._compute_ici(c, ph), lbl, col, alpha))
 
-        for results, lbl, col in datasets:
+        for results, lbl, col, alpha in datasets:
             if not results:
                 continue
             xs = [r['pulse_idx'] for r in results]
             ys = [r['r2']        for r in results]
-            ax.scatter(xs, ys, color=col, s=18, alpha=0.8, label=lbl, zorder=3)
+            ax.scatter(xs, ys, color=col, s=18, alpha=alpha, label=lbl, zorder=3)
 
         # Star on selected pulse
         current_fits = self._compute_ici(cycle, phase)
@@ -831,8 +864,7 @@ class ICIWindow(tk.Toplevel):
             ax.scatter([pulse_idx], [sel['r2']],
                        color=HIGHLIGHT_COLOR, s=70, marker='*', zorder=5)
 
-        pass
-        if any(r for r, _, _ in datasets):
+        if any(r for r, _, _, _ in datasets):
             ax.legend(fontsize=7, loc='best',
                       labelcolor=TEXT, facecolor=BG2, edgecolor=BORDER)
 
@@ -841,8 +873,8 @@ class ICIWindow(tk.Toplevel):
         for ax, xl, yl, ttl in (
             (self.ax_r_chg, 'V (V)', 'R (Ω)',    'R – Charge'),
             (self.ax_r_dis, 'V (V)', 'R (Ω)',    'R – Discharge'),
-            (self.ax_k_chg, 'V (V)', 'k (Ω√s)', 'k – Charge'),
-            (self.ax_k_dis, 'V (V)', 'k (Ω√s)', 'k – Discharge'),
+            (self.ax_k_chg, 'V (V)', 'k (Ω·s⁻¹ᐟ²)', 'k – Charge'),
+            (self.ax_k_dis, 'V (V)', 'k (Ω·s⁻¹ᐟ²)', 'k – Discharge'),
         ):
             ax.cla(); _style_ax(ax, xl, yl, ttl)
 
@@ -909,7 +941,67 @@ class ICIWindow(tk.Toplevel):
         finally:
             self._updating = False
 
-    def _on_apply(self):
+    def _export_csv(self):
+        if self._df is None:
+            return
+        directory = filedialog.askdirectory(title='Select export folder', parent=self)
+        if not directory:
+            return
+
+        max_c = int(self._df[self._df['cycle'] > 0]['cycle'].max())
+        cols  = ['cycle', 'voltage (V)', 'R (Ohm)', 'R_error (Ohm)',
+                 'k (Ohm.s^-1/2)', 'k_error (Ohm.s^-1/2)', 'R2']
+
+        for ph in ('charge', 'discharge'):
+            rows = []
+            for c in range(1, max_c + 1):
+                for r in self._compute_ici(c, ph):
+                    rows.append({
+                        'cycle':                c,
+                        'voltage (V)':          r['V0'],
+                        'R (Ohm)':              r['R'],
+                        'R_error (Ohm)':        r['R_err'],
+                        'k (Ohm.s^-1/2)':       r['k'],
+                        'k_error (Ohm.s^-1/2)': r['k_err'],
+                        'R2':                   r['r2'],
+                    })
+            out = pd.DataFrame(rows, columns=cols)
+            out.to_csv(f'{directory}/ici_{ph}.csv', index=False)
+
+        messagebox.showinfo(
+            'Export complete',
+            f'Saved ici_charge.csv and ici_discharge.csv to:\n{directory}',
+            parent=self
+        )
+
+    def _on_apply(self, scope: str = 'pulse'):
+        cycle = self.selector.cycle_var.get()
+        phase = self.selector.phase_var.get()
+        pulse = self.selector.pulse_var.get()
+        val   = (float(self.reg_bar.start_var.get()),
+                 float(self.reg_bar.length_var.get()))
+
+        if scope == 'pulse':
+            self._r1_pulse_overrides[(cycle, phase, pulse)] = val
+
+        elif scope == 'cycle':
+            self._r1_cycle_overrides[(cycle, phase)] = val
+            # a cycle-wide value should win over any single-pulse overrides in it
+            for key in list(self._r1_pulse_overrides):
+                if key[0] == cycle and key[1] == phase:
+                    del self._r1_pulse_overrides[key]
+
+        elif scope == 'all':
+            self._r1_phase_overrides[phase] = val
+            # an all-cycles value should win over any cycle- or pulse-level
+            # overrides previously set for this phase
+            for key in list(self._r1_cycle_overrides):
+                if key[1] == phase:
+                    del self._r1_cycle_overrides[key]
+            for key in list(self._r1_pulse_overrides):
+                if key[1] == phase:
+                    del self._r1_pulse_overrides[key]
+
         self._ici_cache.clear()
         self._update_live_plots()
 

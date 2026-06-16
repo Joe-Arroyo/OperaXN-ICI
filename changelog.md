@@ -2,18 +2,23 @@
 
 ## [Unreleased]
 
-### June 06, 2026
+## June 16, 2026
 
 ### Added
-- **Capacity Analysis window** (`📈 Capacity` button): opens a side-by-side view of Voltage vs Time and Capacity vs Voltage plots from the loaded electrochemical data.
-- **Charge/discharge/rest classification**: automatically classifies electrochemical data by current sign (positive = charge, negative = discharge, zero = rest).
-- **Cycle detection**: automatically counts and numbers cycles, where each cycle starts with a charge step followed by a discharge step.
-- **Capacity calculation**: cumulative capacity (mAh) computed via trapezoidal integration of current over time, reset at the start of each half-cycle.
-- **Sample mass input** in the Capacity window: enter mass in mg to plot specific capacity (mAh/g). When mass is 0, capacity is shown in mAh.
-- **Cycle selection input** in the Capacity window: filter which cycles to display. Accepts `all`, a single number, comma-separated numbers (`1,3,5`), or ranges (`1-5`).
-- **Cycle count indicator** in the Capacity window: shows the total number of detected cycles next to the cycle input.
-- **Export buttons** in the Capacity window: export Voltage vs Time, Capacity vs Voltage, or both plots as PNG/PDF/SVG at 300 DPI.
-- Time axis in Voltage vs Time plot displayed in hours.
+- **Regression window now specified in time, not points.** The Skip/Length point-count controls were replaced with `Start (s)` / `Length (s)`, defining the rest-period time window used for the ΔV vs √Δt fit (default: start at 0.5 s, length 1.0 s).
+- **Scoped Apply controls** for the regression window — three buttons instead of one:
+  - *Apply (this pulse)* — overrides only the currently selected pulse.
+  - *Apply (all pulses)* — overrides every pulse in the current cycle, for the currently selected phase only.
+  - *Apply (all cycles)* — overrides every pulse, every cycle, for the currently selected phase only.
+  - Overrides resolve pulse → cycle → phase → global default, and applying a broader scope now clears any conflicting narrower override so the change is always immediately visible.
+- **CSV export** of ICI results: a new "⬇ Export CSV" button writes two files (`ici_charge.csv`, `ici_discharge.csv`) covering every cycle, with columns `cycle, voltage (V), R (Ohm), R_error (Ohm), k (Ohm.s^-1/2), k_error (Ohm.s^-1/2), R2`. Export respects whatever regression-window overrides are currently active.
+
+### Fixed
+- Corrected the unit of the kinetic coefficient `k` from the previously mislabeled `Ω√s` to the dimensionally correct **Ω·s⁻¹ᐟ²** (ohms per √second), in the ICI fit plot title and the k vs Voltage panel labels.
+- Fixed misalignment between the top (Overview/Pulse zoom) and bottom (ICI fit/R²) plot rows — both now share the same GridSpec margins so columns line up edge-to-edge.
+- Enlarged the four stacked R/k vs Voltage plots by reclaiming unused GridSpec margin and reducing inter-plot spacing.
+- Fixed the file-export dialog (and its confirmation popup) opening behind the ICI window by explicitly setting `parent=self`, so it now appears above the window that spawned it.
+- R² vs Pulse panel ("All" scope) now shades points by cycle — full opacity for the currently selected cycle, dimmed for others — matching the shading already used in the R/k vs Voltage panels, instead of using a single flat color/alpha for every cycle.
 
 ### June 14, 2026
 
@@ -38,3 +43,19 @@
 - Pulse navigator bounded to actual pulses in selected cycle/phase; resets to 1 when cycle or phase changes, preserves position when navigating within the same phase.
 - Right panel packed before left panel so it always reserves its width.
 - Toolbar coordinate message disabled to prevent hover-induced resize.
+
+
+### June 06, 2026
+
+### Added
+- **Capacity Analysis window** (`📈 Capacity` button): opens a side-by-side view of Voltage vs Time and Capacity vs Voltage plots from the loaded electrochemical data.
+- **Charge/discharge/rest classification**: automatically classifies electrochemical data by current sign (positive = charge, negative = discharge, zero = rest).
+- **Cycle detection**: automatically counts and numbers cycles, where each cycle starts with a charge step followed by a discharge step.
+- **Capacity calculation**: cumulative capacity (mAh) computed via trapezoidal integration of current over time, reset at the start of each half-cycle.
+- **Sample mass input** in the Capacity window: enter mass in mg to plot specific capacity (mAh/g). When mass is 0, capacity is shown in mAh.
+- **Cycle selection input** in the Capacity window: filter which cycles to display. Accepts `all`, a single number, comma-separated numbers (`1,3,5`), or ranges (`1-5`).
+- **Cycle count indicator** in the Capacity window: shows the total number of detected cycles next to the cycle input.
+- **Export buttons** in the Capacity window: export Voltage vs Time, Capacity vs Voltage, or both plots as PNG/PDF/SVG at 300 DPI.
+- Time axis in Voltage vs Time plot displayed in hours.
+
+
