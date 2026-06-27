@@ -9,6 +9,38 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
+def _assign_time(df: pd.DataFrame) -> pd.DataFrame:
+    """Add t_s (elapsed seconds) column if not already present."""
+    if "t_s" not in df.columns:
+        try:
+            ts_col = "original_timestamp" if "original_timestamp" in df.columns else "timestamp"
+            ts = pd.to_datetime(df[ts_col])
+            df["t_s"] = (ts - ts.iloc[0]).dt.total_seconds()
+        except Exception:
+            df["t_s"] = np.arange(len(df), dtype=float)
+    return df
+
+
+def _label_phases(current: np.ndarray) -> np.ndarray:
+    """
+    Assign 'charge', 'discharge', or 'rest' to each sample based on
+    current sign. Rest points inherit the preceding phase label.
+    """
+    labels = np.empty(len(current), dtype=object)
+    for i in range(len(current)):
+        if current[i] > 0:
+            labels[i] = "charge"
+        elif current[i] < 0:
+            labels[i] = "discharge"
+        else:
+            labels[i] = (
+                labels[i - 1]
+                if i > 0 and labels[i - 1] in ("charge", "discharge")
+                else "rest"
+            )
+    return labels
+
+
 def classify_phases(echem_df: pd.DataFrame):
     """
     Split echem_df into charge and discharge DataFrames.
@@ -16,61 +48,21 @@ def classify_phases(echem_df: pd.DataFrame):
     Returns (charge_df, discharge_df), each with a 't_s' column
     (elapsed seconds from start of the full dataset).
     """
-    df = echem_df.copy()
+    df = _assign_time(echem_df.copy())
+    df["phase"] = _label_phases(df["current"].fillna(0).values)
+    return df[df["phase"] == "charge"].copy(), df[df["phase"] == "discharge"].copy()
 
-    try:
-        ts = pd.to_datetime(df["timestamp"])
-        df["t_s"] = (ts - ts.iloc[0]).dt.total_seconds()
-    except Exception:
-        df["t_s"] = np.arange(len(df), dtype=float)
-
-    current = df["current"].fillna(0).values
-    labels = np.empty(len(current), dtype=object)
-
-    for i in range(len(current)):
-        if current[i] > 0:
-            labels[i] = "charge"
-        elif current[i] < 0:
-            labels[i] = "discharge"
-        else:
-            # rest — inherit from previous label, default to "rest" at start
-            labels[i] = labels[i - 1] if i > 0 and labels[i - 1] in ("charge", "discharge") else "rest"
-
-    df["phase"] = labels
-
-    charge_df = df[df["phase"] == "charge"].copy()
-    discharge_df = df[df["phase"] == "discharge"].copy()
-
-    return charge_df, discharge_df
 
 def assign_cycles(echem_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a 'cycle' column (1-indexed). A cycle starts with charge and ends
-    after the following discharge. Rest periods are already merged into
-    their parent phase by classify_phases.
+    Add 'phase' and 'cycle' columns (cycle 1-indexed).
+    A cycle starts with charge and ends after the following discharge.
     """
-    df = echem_df.copy()
+    df = _assign_time(echem_df.copy())
+    labels = _label_phases(df["current"].fillna(0).values)
+    df["phase"] = labels
 
-    try:
-        ts = pd.to_datetime(df["timestamp"])
-        df["t_s"] = (ts - ts.iloc[0]).dt.total_seconds()
-    except Exception:
-        df["t_s"] = np.arange(len(df), dtype=float)
-
-    current = df["current"].fillna(0).values
-    labels = np.empty(len(current), dtype=object)
-
-    # Same phase assignment as classify_phases
-    for i in range(len(current)):
-        if current[i] > 0:
-            labels[i] = "charge"
-        elif current[i] < 0:
-            labels[i] = "discharge"
-        else:
-            labels[i] = labels[i - 1] if i > 0 and labels[i - 1] in ("charge", "discharge") else "rest"
-
-    # Assign cycle numbers
-    cycles = np.zeros(len(labels), dtype=int)
+    cycles = np.zeros(len(df), dtype=int)
     cycle_num = 0
     prev = None
 
@@ -82,7 +74,6 @@ def assign_cycles(echem_df: pd.DataFrame) -> pd.DataFrame:
         # rest before any cycle starts stays 0
         prev = labels[i]
 
-    df["phase"] = labels
     df["cycle"] = cycles
     return df
 

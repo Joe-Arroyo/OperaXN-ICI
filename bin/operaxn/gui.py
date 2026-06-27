@@ -4,6 +4,7 @@ OperaXN - gui.py
 
 import logging
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -328,7 +329,7 @@ class StyledButton(tk.Button):
             relief=tk.FLAT,
             cursor='hand2',
             padx=OPERAXNTheme.PADDING['medium'],
-            pady=3,
+            pady=6 if platform.system() == "Linux" else 3,
             **kwargs
         )
 
@@ -1137,6 +1138,9 @@ class OPERAXN(tk.Frame):
 
     def _process_files_async(self, selected_paths: List[str], data_source: DataSourceType) -> None:
         """Process files asynchronously."""
+        from .input import TimeSortingDialog
+        time_method = TimeSortingDialog.ask_method()
+
         self.state.ui_state = UIState.LOADING
 
         def process():
@@ -1145,6 +1149,7 @@ class OPERAXN(tk.Frame):
                     self.state.scans, self.state.echem_df, self.state.time_method = process_paths(
                         list(selected_paths),
                         self.file_list.show_progress,
+                        time_method=time_method,
                         data_source=data_source
                     )
 
@@ -1200,6 +1205,16 @@ class OPERAXN(tk.Frame):
         message = f"Successfully loaded {len(self.state.scans)} {source_type} scans using {time_info}"
 
         self._show_message("Success", message, "info")
+
+        # Refresh ICI window if it is still open
+        if getattr(self, '_ici_window', None) is not None:
+            try:
+                if self._ici_window.winfo_exists():
+                    self._ici_window._load(self.state.echem_df)
+                else:
+                    self._ici_window = None
+            except Exception:
+                self._ici_window = None
 
     def _check_data_availability(self) -> bool:
         """Check if any valid (non-error) data is available."""
@@ -1655,6 +1670,19 @@ class OPERAXN(tk.Frame):
             )
     
     def _open_capacity_window(self) -> None:
+        df = self.state.echem_df
+        if df is None or df.empty:
+            messagebox.showwarning(
+                'No data', 'Load echem data before opening Capacity Analysis.',
+                parent=self.master)
+            return
+        if 'current' not in df.columns:
+            messagebox.showwarning(
+                'Missing column',
+                "Echem data has no 'current' column — cannot run Capacity Analysis.",
+                parent=self.master)
+            return
+
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from tkinter import filedialog
         from .capacity import plot_capacity_vs_voltage, plot_time_vs_voltage, assign_cycles, parse_cycle_selection
@@ -1776,8 +1804,20 @@ class OPERAXN(tk.Frame):
             messagebox.showerror("Capacity Window Error", traceback.format_exc(), parent=self.master)
 
     def _on_ici_analysis(self) -> None:
+        df = self.state.echem_df
+        if df is None or df.empty:
+            messagebox.showwarning(
+                'No data', 'Load echem data before opening ICI Analysis.',
+                parent=self.master)
+            return
+        if 'current' not in df.columns:
+            messagebox.showwarning(
+                'Missing column',
+                "Echem data has no 'current' column — cannot run ICI Analysis.",
+                parent=self.master)
+            return
         from .ici import ICIWindow
-        ICIWindow(self.master, self.state.echem_df)
+        self._ici_window = ICIWindow(self.master, df)
 
     def _calculate_intensity_limits(self, image: np.ndarray) -> Tuple[float, float]:
         """Calculate intensity limits for image."""

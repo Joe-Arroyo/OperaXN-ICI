@@ -160,13 +160,13 @@ DEFAULT_GIF_LOOP = 0
 
 WINDOW_SIZES = {
     'main': "1150x750",
-    'upload': "400x150",
+    'upload': "520x175" if platform.system() == "Linux" else "400x150",
     'plot_settings': "400x375",
     'export_neutron': "400x375",
     'export_xrd': "400x425",
     'gif': "400x425",
     'progress': "300x100",
-    'time': "400x200"
+    'time': "520x225" if platform.system() == "Linux" else "400x200"
 }
 
 # ============================================================================

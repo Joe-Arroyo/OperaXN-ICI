@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## June 27, 2026
+
+### Fixed
+- **Linux dialog buttons too small**: Added platform-conditional padding to buttons and widened dialog windows (`Upload Options`, `Select Data Source`, `Time Sorting Method`) on Linux.
+- **Time Sorting dialog crash/loop on Linux**: Moved `TimeSortingDialog` creation to the main thread before spawning the file processing thread, resolving a Tkinter threading violation that caused the dialog to freeze or loop on Linux.
+- **ICI analysis failing with Relative Time**: Fixed `_assign_time` in `capacity.py` to use the preserved `original_timestamp` column when available, maintaining sub-second echem timestamp precision that was being lost during HH:MM:SS conversion.
+- **Code duplication in `capacity.py`**: Removed copy-pasted phase-assignment loop from `assign_cycles`; it now calls `classify_phases` internally.
+- **Global matplotlib backend side effect**: Removed `matplotlib.use("TkAgg")` module-level call from `ici.py` that could interfere with the main window's backend setup on import.
+- **No input validation before opening ICI/Capacity windows**: Added guards in `_on_ici_analysis` and `_open_capacity_window` to check that `echem_df` is not `None` and contains a `current` column before opening either window.
+- **Stale ICI cache on data reload**: ICI window cache is now cleared when new data is loaded, preventing stale pulse detection and fit results from persisting across sessions.
+- **`max_rest` hardcoded discrepancy**: `max_rest` pulse detection threshold is now user-configurable in the UI instead of being hardcoded to mismatched values (1800 s vs 300 s).
+- **Apply scope bug**: Fixed bar live values leaking into pulses that were not explicitly overridden when using partial Apply.
+- **Missing trailing newline in `capacity.py`**: Added newline at end of file.
+- **Squashed noise commits**: Removed `nothing` / `Revert "nothing"` commits from git history before merge.
+
+### Confirmed
+- **Current sign convention**: Positive current = charge, negative = discharge — verified correct against echem data files.
+- **`compute_capacity` uses `|I|`**: Intentional — both charge and discharge legs return positive capacity values.
+
+
 ## June 16, 2026
 
 ### Added

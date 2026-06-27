@@ -1,17 +1,6 @@
 """
 ICI Analysis Window for OperaXN.
 
-Layout:
-  ┌──────────────────────────────────────────────────────┐
-  │  [fig_top]  Overview | Pulse zoom    [fig_right]     │
-  │  ─────────────────────────────────   R chg / R dis   │
-  │  Cycle ◀n▶  Pulse ◀n▶  Phase        k chg / k dis   │
-  │  ─────────────────────────────────                   │
-  │  [fig_bot]  ICI fit  | R² vs pulse                   │
-  ├──────────────────────────────────────────────────────┤
-  │  Regression window: Start(s) End(s)  [Apply]         │
-  └──────────────────────────────────────────────────────┘
-
 Three separate matplotlib figures sit in proper expanding Tk frames —
 no overlay geometry conflicts, same resize behaviour as the main window.
 
@@ -38,8 +27,6 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-import matplotlib
-matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -414,6 +401,13 @@ class _RegressionBar(tk.Frame):
         self.length_var = tk.DoubleVar(value=1.0)
         _spinbox(self, self.length_var, from_=0.1, to=9999.0,
                  increment=0.1, format='%.2f', width=6).pack(side='left', padx=(_PAD_S, _PAD_M))
+
+        _separator(self, horizontal=False).pack(side='left', fill='y', padx=_PAD_M, pady=3)
+        _label(self, 'Max rest (s):', dim=True).pack(side='left')
+        self.max_rest_var = tk.DoubleVar(value=300.0)
+        _spinbox(self, self.max_rest_var, from_=1.0, to=99999.0,
+                 increment=10.0, format='%.0f', width=7).pack(side='left', padx=(_PAD_S, _PAD_M))
+
         _Btn(self, 'Apply (this pulse)', style='primary',
              command=lambda: self._on_apply('pulse')).pack(side='left', padx=_PAD_S)
         _Btn(self, 'Apply (all pulses)', style='secondary',
@@ -634,7 +628,8 @@ class ICIWindow(tk.Toplevel):
             if self._df is None:
                 return []
             mask = (self._df['cycle'] == cycle) & (self._df['phase'] == phase)
-            self._pulses[key] = _detect_pulses(self._df[mask], max_rest=300.0)
+            self._pulses[key] = _detect_pulses(
+                self._df[mask], max_rest=float(self.reg_bar.max_rest_var.get()))
         return self._pulses[key]
 
     # ── plot: overview ─────────────────────────────────────────────────
@@ -758,8 +753,7 @@ class ICIWindow(tk.Toplevel):
             ov = self._r1_phase_overrides.get(phase)
             if ov is not None:
                 return ov
-        return (float(self.reg_bar.start_var.get()),
-                float(self.reg_bar.length_var.get()))
+        return self._r1_phase_overrides.get(phase, (0.5, 1.0))
 
     def _compute_ici(self, cycle: int, phase: str) -> list[dict]:
         key = (cycle, phase)
@@ -1002,6 +996,7 @@ class ICIWindow(tk.Toplevel):
                 if key[1] == phase:
                     del self._r1_pulse_overrides[key]
 
+        self._pulses.clear()
         self._ici_cache.clear()
         self._update_live_plots()
 

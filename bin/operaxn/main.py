@@ -767,6 +767,7 @@ class ApplicationManager:
 
         self.root.quit()
         self.root.destroy()
+        os._exit(0)
 
     def _show_error(self, message: str) -> None:
         """Display a fatal-error messagebox, falling back to stderr."""

@@ -4,6 +4,7 @@ Input Module for Data Processing
 
 import logging
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -2273,18 +2274,9 @@ class TimeSortingDialog:
 
         dialog = tk.Toplevel()
         dialog.title("Time Sorting Method")
-        dialog.geometry(WINDOW_SIZES['time'])
         dialog.transient()
-        dialog.grab_set()
-
         dialog.configure(bg=OPERAXNTheme.COLORS['bg_primary'])
-
         dialog.protocol("WM_DELETE_WINDOW", lambda: [result.update({"method": None}), dialog.destroy()])
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
 
         result = {"method": TimeMethod.ABSOLUTE}
 
@@ -2294,16 +2286,14 @@ class TimeSortingDialog:
             font=OPERAXNTheme.FONTS['heading'],
             bg=OPERAXNTheme.COLORS['bg_primary'],
             fg=OPERAXNTheme.COLORS['text_primary']
-        ).pack(pady=20)
+        ).pack(pady=20, padx=30)
 
         var = tk.StringVar(value=TimeMethod.ABSOLUTE.value)
 
-        options = [
+        for value, text in [
             (TimeMethod.ABSOLUTE.value, "Absolute time (use actual timestamps)"),
             (TimeMethod.RELATIVE.value, "Relative time (XRD and echem each start at 00:00:00)")
-        ]
-
-        for value, text in options:
+        ]:
             tk.Radiobutton(
                 dialog,
                 text=text,
@@ -2333,12 +2323,19 @@ class TimeSortingDialog:
             fg=OPERAXNTheme.COLORS['bg_primary'],
             font=OPERAXNTheme.FONTS['button'],
             relief=tk.FLAT,
-            cursor='hand2'
+            cursor='hand2',
+            pady=6 if platform.system() == "Linux" else 3
         )
         confirm_btn.pack()
 
         confirm_btn.bind("<Enter>", lambda e: confirm_btn.config(bg=OPERAXNTheme.COLORS['accent_hover']))
         confirm_btn.bind("<Leave>", lambda e: confirm_btn.config(bg=OPERAXNTheme.COLORS['accent_primary']))
+
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
+        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
 
         dialog.wait_window()
         return result["method"]

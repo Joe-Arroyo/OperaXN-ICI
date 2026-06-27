@@ -3,6 +3,7 @@ Dialog Module for OperaXN
 """
 
 import logging
+import platform
 import tkinter as tk
 import tkinter.ttk as ttk
 from dataclasses import dataclass, field
@@ -177,7 +178,8 @@ class BaseDialog(tk.Toplevel):
             fg=style_config["fg"],
             font=OPERAXNTheme.FONTS['button'],
             relief=tk.FLAT,
-            cursor='hand2'
+            cursor='hand2',
+            pady=6 if platform.system() == "Linux" else 3
         )
 
         # Add hover effects
@@ -302,7 +304,8 @@ class DataSourceSelectionDialog(BaseDialog):
     """Data source type selection dialog."""
 
     def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, "Select Data Source", "400x275")
+        super().__init__(master, "Select Data Source",
+                         "460x300" if platform.system() == "Linux" else "400x275")
         self._create_widgets()
 
     def _create_widgets(self) -> None:
