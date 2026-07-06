@@ -1685,7 +1685,8 @@ class OPERAXN(tk.Frame):
 
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from tkinter import filedialog
-        from .capacity import plot_capacity_vs_voltage, plot_time_vs_voltage, assign_cycles, parse_cycle_selection
+        from .capacity import (plot_capacity_vs_voltage, plot_time_vs_voltage, assign_cycles,
+                                parse_cycle_selection, compute_capacity)
 
         try:
             win = tk.Toplevel(self)
@@ -1736,6 +1737,9 @@ class OPERAXN(tk.Frame):
                         style="secondary").pack(side="left", padx=(0, 4))
             StyledButton(controls, text="💾 Export Both",
                         command=lambda: _export_single("both"),
+                        style="secondary").pack(side="left", padx=(0, 4))
+            StyledButton(controls, text="💾 Export Data (CSV)",
+                        command=lambda: _export_data_csv(),
                         style="secondary").pack(side="left", padx=(0, 4))
 
             fig, (ax_time, ax_cap) = plt.subplots(1, 2, figsize=(14, 5), facecolor="white")
@@ -1796,6 +1800,48 @@ class OPERAXN(tk.Frame):
                         f.tight_layout()
                         f.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
                         plt.close(f)
+
+            def _export_data_csv():
+                try:
+                    mass = float(mass_var.get())
+                except ValueError:
+                    mass = 0.0
+                selected = parse_cycle_selection(cycle_var.get(), _available)
+                if not selected:
+                    messagebox.showwarning('No cycles', 'No cycles selected to export.', parent=win)
+                    return
+
+                path = filedialog.asksaveasfilename(
+                    parent=win, defaultextension=".csv",
+                    filetypes=[("CSV", "*.csv")],
+                    initialfile="capacity_vs_voltage.csv")
+                if not path:
+                    return
+
+                df_full = assign_cycles(self.state.echem_df)
+                rows = []
+                for cycle_num in selected:
+                    cycle_df = df_full[df_full["cycle"] == cycle_num]
+                    for phase in ("charge", "discharge"):
+                        phase_df = cycle_df[cycle_df["phase"] == phase]
+                        if phase_df.empty:
+                            continue
+                        cap = compute_capacity(phase_df)
+                        spec_cap = cap / (mass / 1000.0) if mass > 0 else np.full_like(cap, np.nan)
+                        for t, v, c, sc in zip(phase_df["t_s"].values, phase_df["echem_data"].values,
+                                               cap, spec_cap):
+                            rows.append({
+                                'Cycle':                     cycle_num,
+                                'Phase':                     phase,
+                                'Time (s)':                  t,
+                                'Voltage (V)':                v,
+                                'Capacity (mAh)':             c,
+                                'Specific Capacity (mAh/g)':  sc,
+                            })
+
+                out = pd.DataFrame(rows)
+                out.to_csv(path, index=False)
+                messagebox.showinfo('Export complete', f'Saved data to:\n{path}', parent=win)
 
             mass_entry.bind("<Return>", _replot)
             cycle_entry.bind("<Return>", _replot)

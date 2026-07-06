@@ -32,7 +32,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from .config import OPERAXNTheme, FIGURE_DPI
-from .capacity import assign_cycles
+from .capacity import assign_cycles, compute_capacity
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,10 +122,16 @@ def _detect_pulses(phase_df: pd.DataFrame, max_rest: float = 1800.0) -> list[dic
 
     return pulses
 
-def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: float, r1_length: float) -> dict | None:
+def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: float, r1_length: float,
+                  cap_arr: np.ndarray | None = None) -> dict | None:
     """ΔV vs √Δt linear fit for one pulse. r1_start/r1_length are a time window
     (seconds) into the rest period: fit points with r1_start <= Δt < r1_start+r1_length.
-    Returns None if rest data is insufficient."""
+    Returns None if rest data is insufficient.
+
+    cap_arr, if given, is the cumulative capacity (mAh) for `seg` (same length,
+    same row order — see compute_capacity), used to attach a capacity value to
+    this pulse's V0 point by position rather than by voltage (voltage can repeat
+    across pulses in flat regions, capacity is monotonic)."""
     active = seg[pulse['pulse_mask']]
     rest   = seg[pulse['relax_mask']]
     if active.empty or rest.empty:
@@ -134,6 +140,12 @@ def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: float, r1_length: flo
     V0  = active['echem_data'].iloc[-1]
     t0  = active['t_s'].iloc[-1]
     I_A = active['current'].iloc[-1] / 1000.0  # mA → A
+
+    if cap_arr is not None and len(cap_arr) == len(seg):
+        pulse_cap = cap_arr[pulse['pulse_mask']]
+        capacity  = float(pulse_cap[-1]) if len(pulse_cap) else np.nan
+    else:
+        capacity = np.nan
 
     delta_V = rest['echem_data'].values - V0
     t_rest0 = rest['t_s'].values[0]
@@ -176,15 +188,17 @@ def _compute_fit(seg: pd.DataFrame, pulse: dict, r1_start: float, r1_length: flo
         X_fit=X, y_fit=y_pred,
         slope=slope, intercept=intercept, r2=r2,
         V0=V0, I_A=I_A, R=R, k=k, R_err=R_err, k_err=k_err,
+        capacity=capacity,
     )
 
 
 def _compute_all_pulses(seg: pd.DataFrame, pulses: list[dict], get_r1) -> list[dict]:
     """get_r1(pulse_idx) -> (r1_start_s, r1_length_s) for that pulse."""
+    cap_arr = compute_capacity(seg) if not seg.empty else np.array([])
     results = []
     for i, p in enumerate(pulses):
         r1_start, r1_length = get_r1(i + 1)
-        fit = _compute_fit(seg, p, r1_start, r1_length)
+        fit = _compute_fit(seg, p, r1_start, r1_length, cap_arr=cap_arr)
         if fit is not None:
             fit['pulse_idx'] = i + 1
             results.append(fit)
@@ -421,6 +435,53 @@ class _RegressionBar(tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R/k axis bar  (right panel header — Voltage | Capacity | Specific Capacity)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _RKAxisBar(tk.Frame):
+    """Packed inline (side='right') inside the bottom regression bar, so it
+    adds no new row/height to the layout — right panel keeps its original size."""
+
+    def __init__(self, master, on_change):
+        super().__init__(master, bg=BG2)
+        self._on_change = on_change
+        self._build()
+
+    def _build(self):
+        _separator(self, horizontal=False).pack(side='left', fill='y', padx=_PAD_M, pady=3)
+        _label(self, 'Mass (mg):', dim=True).pack(side='left')
+        self.mass_var = tk.StringVar(value='0')
+        mass_entry = _spinbox(self, self.mass_var, from_=0.0, to=99999.0,
+                               increment=0.1, format='%.2f', width=7,
+                               command=self._on_change)
+        mass_entry.pack(side='left', padx=(_PAD_S, _PAD_M))
+        mass_entry.bind('<Return>', lambda *_: self._on_change())
+        mass_entry.bind('<FocusOut>', lambda *_: self._on_change())
+        self.mass_var.trace_add('write', lambda *_: self._on_change())
+
+        _separator(self, horizontal=False).pack(side='left', fill='y', padx=_PAD_M, pady=3)
+        _label(self, 'R/k vs:').pack(side='left', padx=(_PAD_S, _PAD_S))
+        self.xaxis_var = tk.StringVar(value='voltage')
+        self._btns = {}
+        for val, txt in (('voltage', 'Voltage'),
+                          ('capacity', 'Capacity'),
+                          ('specific_capacity', 'Specific Capacity')):
+            b = _Btn(self, txt,
+                     style='toggle_on' if val == 'voltage' else 'toggle_off',
+                     command=lambda v=val: self._set_xaxis(v))
+            b.pack(side='left', padx=2)
+            self._btns[val] = b
+
+    def _set_xaxis(self, val):
+        self.xaxis_var.set(val)
+        on  = dict(bg=ACCENT, fg=_C['button_text'])
+        off = dict(bg=BG3,    fg=DIM)
+        for v, btn in self._btns.items():
+            btn.config(**(on if v == val else off))
+        self._on_change()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Matplotlib helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -519,6 +580,11 @@ class ICIWindow(tk.Toplevel):
         self.reg_bar = _RegressionBar(self, on_apply=self._on_apply,
                                        on_export=self._export_csv)
         self.reg_bar.pack(fill='x', side='bottom')
+
+        # R/k axis controls live inline in the regression bar (no extra row),
+        # so the figure areas keep their original size.
+        self.rk_axis_bar = _RKAxisBar(self.reg_bar, on_change=self._on_rk_axis_changed)
+        self.rk_axis_bar.pack(side='right', padx=_PAD_S)
 
         # ── Content area ───────────────────────────────────────────────
         content = tk.Frame(self, bg=BG)
@@ -862,19 +928,41 @@ class ICIWindow(tk.Toplevel):
             ax.legend(fontsize=7, loc='best',
                       labelcolor=TEXT, facecolor=BG2, edgecolor=BORDER)
 
-    # ── plot: R and k vs voltage ───────────────────────────────────────────────
+    # ── plot: R and k vs voltage / capacity / specific capacity ────────────────
+    _XAXIS_LABELS = {
+        'voltage':           'V (V)',
+        'capacity':          'Capacity (mAh)',
+        'specific_capacity': 'Specific Capacity (mAh/g)',
+    }
+
+    def _get_mass_mg(self) -> float:
+        try:
+            return float(self.rk_axis_bar.mass_var.get())
+        except (ValueError, tk.TclError):
+            return 0.0
+
     def _update_right_plots(self, cycle: int, phase: str, scope: str):
-        for ax, xl, yl, ttl in (
-            (self.ax_r_chg, 'V (V)', 'R (Ω)',    'R – Charge'),
-            (self.ax_r_dis, 'V (V)', 'R (Ω)',    'R – Discharge'),
-            (self.ax_k_chg, 'V (V)', 'k (Ω·s⁻¹ᐟ²)', 'k – Charge'),
-            (self.ax_k_dis, 'V (V)', 'k (Ω·s⁻¹ᐟ²)', 'k – Discharge'),
+        xaxis   = self.rk_axis_bar.xaxis_var.get()
+        mass_mg = self._get_mass_mg()
+        xl      = self._XAXIS_LABELS[xaxis]
+
+        for ax, yl, ttl in (
+            (self.ax_r_chg, 'R (Ω)',    'R – Charge'),
+            (self.ax_r_dis, 'R (Ω)',    'R – Discharge'),
+            (self.ax_k_chg, 'k (Ω·s⁻¹ᐟ²)', 'k – Charge'),
+            (self.ax_k_dis, 'k (Ω·s⁻¹ᐟ²)', 'k – Discharge'),
         ):
             ax.cla(); _style_ax(ax, xl, yl, ttl)
 
         if self._df is None:
             for ax in (self.ax_r_chg, self.ax_r_dis, self.ax_k_chg, self.ax_k_dis):
                 _stub(ax)
+            self._canvas_right.draw_idle()
+            return
+
+        if xaxis == 'specific_capacity' and mass_mg <= 0:
+            for ax in (self.ax_r_chg, self.ax_r_dis, self.ax_k_chg, self.ax_k_dis):
+                _stub(ax, 'Enter mass (mg) > 0')
             self._canvas_right.draw_idle()
             return
 
@@ -891,20 +979,25 @@ class ICIWindow(tk.Toplevel):
                 res = self._compute_ici(c, ph)
                 if not res:
                     continue
-                vs   = np.array([r['V0']    for r in res])
+                if xaxis == 'voltage':
+                    xs = np.array([r['V0'] for r in res])
+                elif xaxis == 'capacity':
+                    xs = np.array([r['capacity'] for r in res])
+                else:
+                    xs = np.array([r['capacity'] for r in res]) / (mass_mg / 1000.0)
                 Rs   = np.array([r['R']     for r in res])
                 ks   = np.array([r['k']     for r in res])
                 R_e  = np.array([r['R_err'] for r in res])
                 k_e  = np.array([r['k_err'] for r in res])
                 lbl  = f'{ph.capitalize()}{lbl_s}'
-                vR   = ~np.isnan(vs) & ~np.isnan(Rs)
-                vk   = ~np.isnan(vs) & ~np.isnan(ks)
+                vR   = ~np.isnan(xs) & ~np.isnan(Rs)
+                vk   = ~np.isnan(xs) & ~np.isnan(ks)
                 if vR.any():
-                    ax_r.errorbar(vs[vR], Rs[vR], yerr=R_e[vR],
+                    ax_r.errorbar(xs[vR], Rs[vR], yerr=R_e[vR],
                                   fmt='o', color=col, alpha=alpha,
                                   ms=5, lw=1, capsize=3, label=lbl)
                 if vk.any():
-                    ax_k.errorbar(vs[vk], ks[vk], yerr=k_e[vk],
+                    ax_k.errorbar(xs[vk], ks[vk], yerr=k_e[vk],
                                   fmt='o', color=col, alpha=alpha,
                                   ms=5, lw=1, capsize=3, label=lbl)
 
@@ -942,17 +1035,22 @@ class ICIWindow(tk.Toplevel):
         if not directory:
             return
 
-        max_c = int(self._df[self._df['cycle'] > 0]['cycle'].max())
-        cols  = ['cycle', 'voltage (V)', 'R (Ohm)', 'R_error (Ohm)',
-                 'k (Ohm.s^-1/2)', 'k_error (Ohm.s^-1/2)', 'R2']
+        max_c   = int(self._df[self._df['cycle'] > 0]['cycle'].max())
+        mass_mg = self._get_mass_mg()
+        cols    = ['cycle', 'voltage (V)', 'capacity (mAh)', 'specific_capacity (mAh/g)',
+                   'R (Ohm)', 'R_error (Ohm)',
+                   'k (Ohm.s^-1/2)', 'k_error (Ohm.s^-1/2)', 'R2']
 
         for ph in ('charge', 'discharge'):
             rows = []
             for c in range(1, max_c + 1):
                 for r in self._compute_ici(c, ph):
                     rows.append({
-                        'cycle':                c,
-                        'voltage (V)':          r['V0'],
+                        'cycle':                       c,
+                        'voltage (V)':                 r['V0'],
+                        'capacity (mAh)':               r['capacity'],
+                        'specific_capacity (mAh/g)':     (r['capacity'] / (mass_mg / 1000.0)
+                                                           if mass_mg > 0 else np.nan),
                         'R (Ohm)':              r['R'],
                         'R_error (Ohm)':        r['R_err'],
                         'k (Ohm.s^-1/2)':       r['k'],
@@ -967,6 +1065,14 @@ class ICIWindow(tk.Toplevel):
             f'Saved ici_charge.csv and ici_discharge.csv to:\n{directory}',
             parent=self
         )
+
+    def _on_rk_axis_changed(self, *_):
+        if self._df is None:
+            return
+        cycle = self.selector.cycle_var.get()
+        phase = self.selector.phase_var.get()
+        scope = self.selector.scope_var.get()
+        self._update_right_plots(cycle, phase, scope)
 
     def _on_apply(self, scope: str = 'pulse'):
         cycle = self.selector.cycle_var.get()
